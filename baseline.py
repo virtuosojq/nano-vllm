@@ -4,11 +4,13 @@
   1. 对当前实现建立可复现的性能/正确性基线 (baseline)
   2. 后续每次优化后重跑并与基线对比 (--compare), 得到可量化的提升证据
 
-包含 4 个测试套件:
+包含 5 个测试套件:
   correctness  正确性回归   固定 prompt + 近贪心采样, 输出 token 序列的 SHA256 指纹
   throughput   离线吞吐     256 条随机长度序列, 统计总吞吐 / prefill / decode tok/s
   latency      在线延迟     batch=1/8/64, 统计 TTFT / TPOT / 端到端延迟的 P50/P90/P99
   prefix_cache 前缀缓存     共享长前缀 vs 无共享前缀, 量化 prefix caching 收益
+  serving      开环在线压测 指数间隔到达模拟泊松流, 扫请求速率, 输出 TTFT/TPOT 分位数
+                           + SLO goodput (参考社区 PR #29 并修正其三处缺陷, 见函数注释)
 
 用法:
   python baseline.py                        # 跑全部套件
@@ -25,7 +27,8 @@ import platform
 import subprocess
 import sys
 import time
-from random import randint, seed
+from itertools import accumulate
+from random import randint, seed, expovariate
 
 import torch
 
@@ -184,6 +187,82 @@ def suite_prefix_cache(engine: LLM, num_seqs: int = 32) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# 开环在线压测 (serving)
+#
+# 参考上游 PR #29 (serving_bench.py) 的思路并修正其三处缺陷:
+#   1. 到达间隔用指数分布 (泊松过程的间隔分布), 而非 PR 误用的泊松分布
+#      (泊松分布是单位时间事件数, 取值为非负整数, 会出现 0 间隔的突发);
+#   2. TTFT 从请求实际注入时刻起算, 且用 num_completion_tokens >= 1 判定首
+#      token, 不依赖 "在 running 队列" 的调度器隐含约定;
+#   3. 保留分位数统计 (PR 只有均值), 并报告 injection_lag 量化单线程开环
+#      固有的 "到达被 step 边界推迟" 效应, 以及 SLO goodput.
+# --------------------------------------------------------------------------- #
+def suite_serving(engine: LLM, rates: list[float], num_requests: int = 128,
+                  slo_ttft_ms: float = 500.0, slo_tpot_ms: float = 50.0) -> dict:
+    results = {}
+    for rate in rates:
+        seed(30 + int(rate * 10))    # 每档速率独立且可复现的负载
+        prompts = [[randint(0, 10000) for _ in range(randint(100, 1024))]
+                   for _ in range(num_requests)]
+        sp = [SamplingParams(temperature=0.6, ignore_eos=True,
+                             max_tokens=randint(100, 1024)) for _ in range(num_requests)]
+        arrival_schedule = list(accumulate(expovariate(rate) for _ in range(num_requests)))
+
+        sent = 0
+        arrival_t, schedule_t, first_t, finish_t, n_out = {}, {}, {}, {}, {}
+        t_start = time.perf_counter()
+        while sent < num_requests or not engine.is_finished():
+            now = time.perf_counter() - t_start
+            # 到点即注入: 按计划到达时刻把请求送进引擎
+            while sent < num_requests and arrival_schedule[sent] <= now:
+                engine.add_request(prompts[sent], sp[sent])
+                seq_id = engine.scheduler.waiting[-1].seq_id
+                arrival_t[seq_id] = time.perf_counter()    # 实际注入时刻(可能晚于计划)
+                schedule_t[seq_id] = arrival_schedule[sent]
+                sent += 1
+            if engine.scheduler.waiting or engine.scheduler.running:
+                outputs, _ = engine.step()
+                now = time.perf_counter()
+                for seq in engine.scheduler.running:
+                    if seq.num_completion_tokens >= 1 and seq.seq_id not in first_t:
+                        first_t[seq.seq_id] = now
+                for seq_id, token_ids in outputs:
+                    first_t.setdefault(seq_id, now)
+                    finish_t[seq_id] = now
+                    n_out[seq_id] = len(token_ids)
+            else:
+                time.sleep(0.001)    # 引擎空闲, 等下一批到达, 避免忙转
+        total_time = time.perf_counter() - t_start
+
+        ttfts, tpots, e2es, lags = [], [], [], []
+        good = 0
+        for seq_id in finish_t:
+            ttft = first_t[seq_id] - arrival_t[seq_id]
+            e2e = finish_t[seq_id] - arrival_t[seq_id]
+            n = n_out[seq_id]
+            tpot = (finish_t[seq_id] - first_t[seq_id]) / (n - 1) if n > 1 else 0.0
+            ttfts.append(ttft)
+            tpots.append(tpot)
+            e2es.append(e2e)
+            lags.append(arrival_t[seq_id] - t_start - schedule_t[seq_id])
+            if ttft * 1e3 <= slo_ttft_ms and (n <= 1 or tpot * 1e3 <= slo_tpot_ms):
+                good += 1
+        results[f"rate_{rate:g}"] = {
+            "num_requests": num_requests,
+            "total_time_s": round(total_time, 3),
+            "request_throughput": round(len(finish_t) / total_time, 3),
+            "ttft_ms": {k: round(v * 1e3, 2) for k, v in summarize(ttfts).items()},
+            "tpot_ms": {k: round(v * 1e3, 2) for k, v in summarize(tpots).items()},
+            "e2e_latency_s": {k: round(v, 3) for k, v in summarize(e2es).items()},
+            # 注入延迟: 实际注入落后计划到达的程度, 暴露 step 边界量化效应
+            "injection_lag_ms": {k: round(v * 1e3, 2) for k, v in summarize(lags).items()},
+            "goodput_req_s": round(good / total_time, 3),
+            "slo_attainment": round(good / len(finish_t), 3) if finish_t else 0.0,
+        }
+    return {"slo": {"ttft_ms": slo_ttft_ms, "tpot_ms": slo_tpot_ms}, **results}
+
+
+# --------------------------------------------------------------------------- #
 # 元信息 / 报告
 # --------------------------------------------------------------------------- #
 def collect_meta(model_path: str, engine: LLM) -> dict:
@@ -235,7 +314,7 @@ def compare(old_path: str, new_path: str):
             continue
         delta = (n - o) / o * 100
         # 延迟类指标下降为优, 吞吐类上升为优
-        better = (delta < 0) if any(s in k for s in ("ttft", "tpot", "latency", "time")) else (delta > 0)
+        better = (delta < 0) if any(s in k for s in ("ttft", "tpot", "latency", "time", "lag")) else (delta > 0)
         mark = " ↑优" if better and abs(delta) > 1 else (" ↓劣" if abs(delta) > 1 else "")
         print(f"{k:<58} {o:>12.2f} {n:>12.2f} {delta:>+9.1f}%{mark}")
 
@@ -252,8 +331,10 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", default=os.environ.get("NANOVLLM_MODEL", DEFAULT_MODEL))
     parser.add_argument("--suites", nargs="+",
-                        choices=["correctness", "throughput", "latency", "prefix_cache"],
-                        default=["correctness", "throughput", "latency", "prefix_cache"])
+                        choices=["correctness", "throughput", "latency", "prefix_cache", "serving"],
+                        default=["correctness", "throughput", "latency", "prefix_cache", "serving"])
+    parser.add_argument("--serving-rates", nargs="+", type=float, default=[2.0, 4.0, 8.0],
+                        help="serving 套件扫描的请求速率 (req/s)")
     parser.add_argument("--save", default=None, help="保存名, 存至 results/<名>.json")
     parser.add_argument("--enforce-eager", action="store_true", help="禁用 CUDA Graph")
     parser.add_argument("--compare", nargs=2, metavar=("OLD.json", "NEW.json"),
@@ -272,8 +353,12 @@ def main():
     for name in args.suites:
         print(f"running suite: {name} ...")
         fn = {"correctness": suite_correctness, "throughput": suite_throughput,
-              "latency": suite_latency, "prefix_cache": suite_prefix_cache}[name]
-        report["suites"][name] = fn(engine)
+              "latency": suite_latency, "prefix_cache": suite_prefix_cache,
+              "serving": suite_serving}[name]
+        if name == "serving":
+            report["suites"][name] = fn(engine, args.serving_rates)
+        else:
+            report["suites"][name] = fn(engine)
 
     text = json.dumps(report, indent=2, ensure_ascii=False)
     print("\n" + text)

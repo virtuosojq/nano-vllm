@@ -19,7 +19,10 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 **基线自身的两个已知局限**（见 1.3，建议与 P0 一起补）：
 
 - 每套件只跑 1 次，无方差信息，<5% 的优化结论不可信；
-- 所有请求第 0 秒同时入队（饱和压测），测不出排队行为与 prefill/decode 干扰。
+- ~~所有请求第 0 秒同时入队（饱和压测），测不出排队行为~~ → 已由 `serving` 套件解决
+  （2026-08：指数间隔开环注入 + TTFT/TPOT 分位数 + SLO goodput + injection_lag，
+  参考上游 PR #29 并修正其泊松间隔误用、TTFT 判定依赖调度器隐含约定、无分位数三处缺陷；
+  remaining：mixed 套件尚未加，prefill/decode 干扰仍测不到）。
 
 ## 1. P0 — 打地基（低成本，让后续结论可信）
 
@@ -66,12 +69,29 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 - **预期**：代码/重复文本场景 decode 吞吐 +30%~80%；新增"接受率"指标（1.2 的埋点顺手记录）。
 - **面试亮点**：vLLM/SGLang 都在用，可讲清 verify 的数学等价性（接受前缀 + 按概率重采样首个拒绝位）。
 
-### 2.3 支持新模型（Qwen2 / Llama-3）
+### 2.3 模型注册表 + Llama 移植（多模型支持第一步）
 
-- **现状锚点**：`model_runner.py:31` 硬编码 `from nanovllm.models.qwen3 import Qwen3ForCausalLM`；
-  目前唯一的模型文件是 `models/qwen3.py`。
-- **做法**：模型注册表（`hf_config.model_type → class`），把 GQA 头数、norm 位置（pre/post）、RoPE 参数配置化。
-- **验收**：同一 harness 下两份模型的基线报告 + HF 对齐测试通过，体现通用性而非 hack。
+- **现状锚点**：`model_runner.py:9,31` 硬编码 `Qwen3ForCausalLM`；仓库唯一模型文件 `models/qwen3.py`。
+- **参考实现**：上游 PR #95（`model_registry.py` 125 行 + `models/__init__.py`）、PR #188（`models/llama.py` 204 行 + `rotary_embedding.py` +78 行）。均未被合并，可整体借鉴。
+- **做法（两步）**：
+  1. **注册表**：新增 `models/model_registry.py`，按 `hf_config.architectures[0]` 查表（比 `model_type` 稳——密集/MoE/VL 的 architectures 名不同，天然分流，PR #251 也验证了这个方向）；`model_runner.py` 改为 `create_model(hf_config)`，仅 ~10 行改动。
+  2. **Llama 移植**：新增 `models/llama.py`，以 PR #188 为底。与 Qwen3 的实际差异很小：无 q/k-norm（`qwen3.py:77-79` 的分支自然不触发）、tied embedding（`qwen3.py:238` 已有处理，Llama-3.2-1B/3B 是 tied）；**真正的工作量在 RoPE**——Llama-3 的 `rope_scaling` 频段重标定（low/high freq 双因子）需在 `rotary_embedding.py` 加解析分支，且 transformers 新旧版本的 rope_scaling 字段格式有变（上游 #198/#214/#182 三个 PR 都在修这个坑）。
+- **模型选择**：Llama-3.2-3B（~6GB，单卡，迭代快）做对齐调试，Llama-3.1-8B 做性能报告。
+- **验收**：HF `generate(do_sample=False)` 逐 token 对齐 100%（复用 1.1 的对齐框架）；`baseline.py` 全套件在 Llama 上出独立报告，与 Qwen3 共用同一 harness。
+- **面试亮点**：能列清 Qwen3/Llama 的架构差异清单（q/k-norm、rope scaling、tied embedding、attention bias），而不是"改了个类名"。
+
+### 2.5 Qwen3-MoE 支持（依赖：2.3 注册表 + 3.6 FP8 权重量化）
+
+- **现状锚点**：`Qwen3MLP`（`qwen3.py:101-133`）是密集 SwiGLU；MoE 即把每层 MLP 替换为 router + 128 专家 top-8 的稀疏块，**注意力/调度/KV cache/prefix cache 全部原样复用**。
+- **参考实现**：上游 PR #251（+1311 行：`Qwen3MoeForCausalLM` + fused MoE Triton kernel + top-k 路由 + 注册表接入，最完整，首选研读对象）、PR #116（FuseMoeLinear 版）、PR #236。
+- **显存账（硬前提）**：Qwen3-30B-A3B 总参 30.5B，BF16 权重 61GB > 2×4090D 的 48GB；**必须走官方 FP8 checkpoint（约 31GB，TP2 每卡 ~15.5GB）+ weight-only 反量化**，因此 3.6 是本项前置。磁盘：数据盘剩约 47GB，Qwen3-4B(8GB) + 30B-A3B-FP8(~31GB) 可同放但余量小。
+- **做法（三块，kernel 是大头）**：
+  1. `models/qwen3_moe.py`：`Qwen3MoeSparseMoeBlock`（router gate + experts），config 读 `num_experts`/`num_experts_per_tok`/`moe_intermediate_size`；
+  2. top-k 路由：router logits → top-8 → softmax 权重（几十行）；
+  3. **fused MoE Triton kernel**：逐专家 Python 循环慢到不可用（PR #116 点名 HF 官方实现的性能问题），需按 expert 重排 token 的 grouped-GEMM 融合 kernel，从 vLLM / PR #251 移植。TP 策略先做"每个 expert 的 intermediate 维切分"，复用现有 `MergedColumnParallelLinear`/`RowParallelLinear` 基建；expert parallel 留作扩展。
+- **量化指标**：① decode 吞吐 vs Qwen3-4B/8B 密集版（"3.3B 激活"的算力优势 vs 专家权重搬运的带宽劣势）；② **batch 敏感性曲线**（MoE 特有：小 batch 带宽浪费、大 batch 专家重叠摊薄）；③ 相对 HF transformers MoE 实现的加速比。
+- **工作量**：3-5d（kernel 移植占一半以上）。
+- **面试亮点**：MoE 是服务侧最主流的架构方向，能讲清"显存看总参、算力看激活参"、fused kernel 为什么必须有、TP/EP 两种专家切分的 trade-off。
 
 ### 2.4 调度策略消融：prefill/decode 干扰（新增）
 
@@ -91,13 +111,16 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 | 3.3 融合 Triton kernel | `layernorm.py` / `rotary_embedding.py` 均为独立 kernel，逐层多次 launch | RMSNorm+residual+RoPE 融合，减少 launch 次数 | eager 模式 `step_time_ms.p50` 下降；`nsys` 里 launch 间隙缩短的证据 |
 | 3.4 CUDA Graph 覆盖 prefill | `model_runner.py:197`：prefill 恒走 eager；graph 仅 decode 且 bs≤512 | prefill 按 token 数分桶 capture，或 decode 桶粒度调优（当前 `[1,2,4,8]+16 步进`，512 上限外的 batch 回落 eager） | 桶边界附近的延迟毛刺消除；短 prompt TTFT 变化 |
 | 3.5 prefix cache 驱逐与 CoW（新增） | `block_manager.py:31` `hash_to_block_id` 无上限、无 LRU；`free_block_ids.remove()` 是 O(n)；命中块的追加写入未做 copy-on-write（`hash_blocks` 直接改共享块内容） | LRU 驱逐 + O(1) 索引 + 命中块追加前复制 | 长跑（数万请求）下命中率稳定不衰减；`hash_blocks` 边界场景正确性测试（共享块被追加时的污染问题） |
+| 3.6 FP8 权重量化（weight-only，**MoE 前置**） | `loader.py` 按原始 dtype 加载，2×4090D 跑不了 30B 级权重 | 加载官方 FP8 checkpoint（如 Qwen3-30B-A3B-FP8，约 31GB），matmul 前 weight-only 反量化回 BF16 计算（参考上游 PR #241）；4090D 是 Ada，后续可进阶 FP8 GEMM | 显存减半后 30B-A3B 能以 TP2 跑起来；与 BF16 权重的输出对齐率；反量化开销 <3% |
 
 ## 4. 工程亮点（非性能，但面试加分）
 
 - **OpenAI 兼容 server**（FastAPI + SSE 流式输出）：把引擎变成"产品"，演示多并发下指标曲线。
-  有了 server 才能做下面这条——当前 baseline.py 是进程内直连引擎，测不了 serving 链路。
-- **开环压测 + goodput**（新增，补齐与业界基准的方法论差距）：泊松到达按指定速率注入请求，扫速率画
-  吞吐-延迟曲线，报告满足 SLO（如 TTFT P99 < 500ms）的 goodput。业界工具（vLLM benchmark_serving、NVIDIA GenAI-Perf）都是这个范式。
+  有了 server 才能测完整 serving 链路（HTTP/流式）——当前 `serving` 套件是进程内直连引擎，
+  只覆盖调度器+引擎层的排队行为。
+- **开环压测 + goodput**：✅ 引擎层已完成（baseline.py `serving` 套件，指数到达 + goodput +
+  injection_lag）；待做：server 层 HTTP 压测（对标 vLLM benchmark_serving、NVIDIA GenAI-Perf 范式），
+  以及用多档速率画吞吐-延迟曲线定位拐点。
 - **压测对比**：与 vLLM 同机同模型对比吞吐/延迟，`bench.py` 已留了 vLLM 切换注释。
 - **结果文档**：每次优化的 before/after 表格 + 火焰图（`nsys` 或 `torch.profiler`）。
 - **正确性回归自动化**：`git hook` / CI 里跑 correctness 套件，指纹不一致禁止提交（比"我记得没改坏"有说服力）。
@@ -105,11 +128,12 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 ## 推荐执行顺序
 
 ```
-1.1 贪心+HF对齐 (0.5d) → 1.3 基线统计补强 (0.5d) → 2.1 overlap (1-2d)
-    → 2.2 投机解码 (2-3d) → 2.4 调度消融 (1d) → 2.3 新模型 (1d) → 视时间选 3.x
+1.1 贪心+HF对齐 (0.5d) → 1.3 基线统计补强 (0.5d) → 2.3 注册表+Llama (1.5d)
+    → 2.1 overlap (1-2d) → 3.6 FP8 权重量化 (1-2d) → 2.5 Qwen3-MoE (3-5d)
+    → 2.4 调度消融 / 2.2 投机解码 视兴趣选 → 其余 3.x
 ```
 
-（1.2 埋点随手做，穿插在各优化中；server + 开环压测放在 2.x 完成后，作为成果展示层。）
+依赖链说明：2.5 MoE 依赖 2.3 的注册表（按 architectures 分流）和 3.6 的 FP8 加载（否则 61GB 权重放不进 48GB），所以这两项排在它前面；2.2/2.4 与模型支持相互独立，可按兴趣对调。
 
 ## 结果台账（每次优化追加一行）
 
@@ -122,6 +146,7 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 ## 面试叙事主线
 
 **"我复刻了 vLLM 的核心机制（PagedAttention、continuous batching、chunked prefill、CUDA graph），
-建立了可复现、带统计置信的基准体系并与 HF 对齐正确性，然后用 N 项有量化验证的优化
-（overlap 调度、投机解码、调度策略消融）把 decode 吞吐提升了 X%、TPOT P99 降低了 Y%，
+建立了可复现、带统计置信的基准体系并与 HF 对齐正确性；把引擎泛化成多架构
+（模型注册表 + Llama 移植 + MoE with fused Triton kernel + FP8 权重量化），
+再用 N 项有量化验证的优化（overlap 调度、调度策略消融等）把 decode 吞吐提升 X%、TPOT P99 降低 Y%，
 并能用火焰图解释每一项收益的来源。"**
