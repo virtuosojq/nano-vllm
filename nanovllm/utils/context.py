@@ -18,6 +18,8 @@ class Context:
                                                          #       = block_id * block_size + offset; -1 表示 prefix cache 命中跳过
     context_lens: torch.Tensor | None = None              # [S] decode: 每条序列当前长度
     block_tables: torch.Tensor | None = None              # [S, max_blocks] 每条序列引用的物理块 ID 列表
+    # 2.2 verify: False → LMHead 保留全部 query 位置的 logits (而非每条只取末 token)
+    gather_last_logit_only: bool = True
 
 
 _CONTEXT = Context()
@@ -26,10 +28,23 @@ def get_context():
     """模型层调用: 获取当前 step 的上下文张量。"""
     return _CONTEXT
 
-def set_context(is_prefill, cu_seqlens_q=None, cu_seqlens_k=None, max_seqlen_q=0, max_seqlen_k=0, slot_mapping=None, context_lens=None, block_tables=None):
+def set_context(
+    is_prefill,
+    cu_seqlens_q=None,
+    cu_seqlens_k=None,
+    max_seqlen_q=0,
+    max_seqlen_k=0,
+    slot_mapping=None,
+    context_lens=None,
+    block_tables=None,
+    gather_last_logit_only: bool = True,
+):
     """ModelRunner 调用: 把准备好的张量写入全局 Context。"""
     global _CONTEXT
-    _CONTEXT = Context(is_prefill, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, context_lens, block_tables)
+    _CONTEXT = Context(
+        is_prefill, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+        slot_mapping, context_lens, block_tables, gather_last_logit_only,
+    )
 
 def reset_context():
     """每次 step 结束后调用: 清空 Context, 防止下次误用旧张量。"""

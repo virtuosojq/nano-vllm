@@ -1,6 +1,7 @@
 from copy import copy
 from enum import Enum, auto
 from itertools import count
+from time import perf_counter
 
 from nanovllm.sampling_params import SamplingParams
 
@@ -29,6 +30,14 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        # 2.2 verify 窗口: [last_token] + drafts; 仅 n-gram 路径使用
+        self.verify_input_ids: list[int] | None = None
+        self.num_draft_tokens: int = 0
+        self.num_accepted_drafts: int = 0  # 本步接受的 draft 数 (不含 bonus)
+        # 1.2 per-request 计时 (由 LLMEngine 填写)
+        self.arrival_time = perf_counter()
+        self.first_token_time: float | None = None
+        self.finish_time: float | None = None
 
     def __len__(self):
         return self.num_tokens
@@ -71,10 +80,25 @@ class Sequence:
 
     def __getstate__(self):
         last_state = self.last_token if not self.is_prefill else self.token_ids
-        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.block_table, last_state)
+        return (
+            self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens,
+            self.num_scheduled_tokens, self.block_table, last_state,
+            self.verify_input_ids, self.num_draft_tokens,
+        )
 
     def __setstate__(self, state):
-        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.block_table, last_state = state
+        if len(state) == 6:
+            # 兼容旧 pickle
+            self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.num_scheduled_tokens, self.block_table, last_state = state
+            self.verify_input_ids = None
+            self.num_draft_tokens = 0
+        else:
+            (
+                self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens,
+                self.num_scheduled_tokens, self.block_table, last_state,
+                self.verify_input_ids, self.num_draft_tokens,
+            ) = state
+        self.num_accepted_drafts = 0
         if isinstance(last_state, list):
             self.token_ids = last_state
             self.last_token = self.token_ids[-1]

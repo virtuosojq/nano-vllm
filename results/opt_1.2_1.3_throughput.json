@@ -1,0 +1,146 @@
+{
+  "meta": {
+    "timestamp": "2026-08-19 20:49:30",
+    "git_commit": "a5fa446",
+    "model": "/root/autodl-tmp/huggingface/Qwen3-0.6B/",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "repeats": 3,
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false
+    }
+  },
+  "suites": {
+    "throughput": {
+      "n_repeats": 3,
+      "median": {
+        "num_seqs": 256.0,
+        "total_time_s": 21.621,
+        "total_completion_tokens": 133966.0,
+        "throughput_tok_s": 6196.18,
+        "prefill_tokens": 182613.0,
+        "decode_tokens": 133625.0,
+        "ttft_ms": {
+          "mean": 687.99,
+          "p50": 708.68,
+          "p90": 1131.89,
+          "p99": 1258.01
+        },
+        "tpot_ms": {
+          "mean": 26.61,
+          "p50": 26.4,
+          "p90": 30.93,
+          "p99": 49.39
+        },
+        "itl_ms": {
+          "mean": 24.67,
+          "p50": 22.85,
+          "p90": 23.57,
+          "p99": 43.19
+        },
+        "e2e_latency_s": {
+          "mean": 13.573,
+          "p50": 14.123,
+          "p90": 20.363,
+          "p99": 20.9
+        },
+        "step_time_ms": {
+          "mean": 15.39,
+          "p50": 16.76,
+          "p90": 23.12,
+          "p99": 23.54
+        },
+        "engine_metrics": {
+          "prefix_cache_hit_rate": 0.0919,
+          "prefix_hit_blocks": 89.0,
+          "prefix_req_blocks": 968.0,
+          "kv_utilization": {
+            "mean": 0.5981,
+            "peak": 1.0,
+            "num_samples": 1401.0
+          },
+          "request_ttft_ms": {
+            "mean": 686.87,
+            "p50": 707.19,
+            "p90": 1130.18,
+            "p99": 1256.23
+          },
+          "request_tpot_ms": {
+            "mean": 26.61,
+            "p50": 26.4,
+            "p90": 30.93,
+            "p99": 49.39
+          },
+          "num_finished_requests": 256.0
+        }
+      },
+      "range": {
+        "num_seqs": 0.0,
+        "total_time_s": 0.179,
+        "total_completion_tokens": 0.0,
+        "throughput_tok_s": 50.98,
+        "prefill_tokens": 0.0,
+        "decode_tokens": 0.0,
+        "ttft_ms": {
+          "mean": 180.72,
+          "p50": 180.95,
+          "p90": 178.1,
+          "p99": 177.54
+        },
+        "tpot_ms": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p90": 0.07,
+          "p99": 0.05
+        },
+        "itl_ms": {
+          "mean": 0.0,
+          "p50": 0.02,
+          "p90": 0.08,
+          "p99": 0.78
+        },
+        "e2e_latency_s": {
+          "mean": 0.182,
+          "p50": 0.184,
+          "p90": 0.183,
+          "p99": 0.183
+        },
+        "step_time_ms": {
+          "mean": 0.13,
+          "p50": 0.02,
+          "p90": 0.04,
+          "p99": 0.07
+        },
+        "engine_metrics": {
+          "prefix_cache_hit_rate": 0.0,
+          "prefix_hit_blocks": 0.0,
+          "prefix_req_blocks": 0.0,
+          "kv_utilization": {
+            "mean": 0.0,
+            "peak": 0.0,
+            "num_samples": 0.0
+          },
+          "request_ttft_ms": {
+            "mean": 180.56,
+            "p50": 180.71,
+            "p90": 177.87,
+            "p99": 177.31
+          },
+          "request_tpot_ms": {
+            "mean": 0.0,
+            "p50": 0.0,
+            "p90": 0.07,
+            "p99": 0.06
+          },
+          "num_finished_requests": 0.0
+        }
+      }
+    }
+  }
+}

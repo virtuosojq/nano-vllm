@@ -6,10 +6,12 @@ from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
+from nanovllm.engine.decode_input_batch import DecodeInputBatch
 from nanovllm.models.qwen3 import Qwen3ForCausalLM
 from nanovllm.layers.sampler import Sampler
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
+from nanovllm.engine.ngram_speculation import propose_ngram_drafts, accept_greedy_drafts
 
 
 class ModelRunner:
@@ -22,6 +24,7 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
+        self.decode_input_batch: DecodeInputBatch | None = None
 
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
@@ -35,6 +38,7 @@ class ModelRunner:
         self.allocate_kv_cache()
         if not self.enforce_eager:
             self.capture_cudagraph()
+            self._init_decode_input_batch()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
@@ -46,6 +50,16 @@ class ModelRunner:
                 dist.barrier()
                 self.shm = SharedMemory(name="nanovllm")
                 self.loop()
+
+    def _init_decode_input_batch(self):
+        max_bs = min(self.config.max_num_seqs, 512)
+        max_num_blocks = (self.config.max_model_len + self.block_size - 1) // self.block_size
+        self.decode_input_batch = DecodeInputBatch(
+            max_bs,
+            max_num_blocks,
+            self.block_size,
+            allocate_temperature_gpu=(self.rank == 0),
+        )
 
     def exit(self):
         if self.world_size > 1:
@@ -170,6 +184,7 @@ class ModelRunner:
         return input_ids, positions
 
     def prepare_decode(self, seqs: list[Sequence]):
+        """Eager / 超大 batch: 保持原路径 (每步新建 tensor)."""
         input_ids = []
         positions = []
         slot_mapping = []
@@ -178,7 +193,7 @@ class ModelRunner:
             input_ids.append(seq.last_token)
             positions.append(len(seq) - 1)
             context_lens.append(len(seq))
-            slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
+            slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -187,10 +202,87 @@ class ModelRunner:
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
 
+    @torch.inference_mode()
+    def prepare_decode_graph(self, seqs: list[Sequence]):
+        """2.6: NumPy 打包进常驻 pinned buffer, 再 H2D 写入 graph 输入."""
+        assert self.decode_input_batch is not None
+        bs = len(seqs)
+        graph_bucket = next(x for x in self.graph_bs if x >= bs)
+        view = self.decode_input_batch.prepare_decode(
+            seqs, graph_bucket, include_temperatures=(self.rank == 0),
+        )
+        db = self.decode_input_batch
+        gv = self.graph_vars
+        # 直接拷进 capture 时绑定的持久 GPU buffer, 无临时 GPU tensor / 二次 D2D
+        gv["input_ids"][:graph_bucket].copy_(db.input_ids_cpu[:graph_bucket], non_blocking=True)
+        gv["positions"][:graph_bucket].copy_(db.positions_cpu[:graph_bucket], non_blocking=True)
+        gv["slot_mapping"][:graph_bucket].copy_(db.slot_mapping_cpu[:graph_bucket], non_blocking=True)
+        gv["context_lens"][:graph_bucket].copy_(db.context_lens_cpu[:graph_bucket], non_blocking=True)
+        w = view.active_block_width
+        gv["block_tables"][:graph_bucket, :w].copy_(
+            db.block_tables_cpu[:graph_bucket, :w], non_blocking=True,
+        )
+        if w < gv["block_tables"].size(1):
+            gv["block_tables"][:graph_bucket, w:].fill_(-1)
+        # capture 时 context 指向 graph_vars 切片; 这里保持同一批地址供非 graph 逻辑一致
+        set_context(
+            False,
+            slot_mapping=gv["slot_mapping"][:bs],
+            context_lens=gv["context_lens"][:bs],
+            block_tables=gv["block_tables"][:bs, :w],
+        )
+        return view
+
     def prepare_sample(self, seqs: list[Sequence]):
         temperatures = [seq.temperature for seq in seqs]
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
         return temperatures
+
+    def prepare_verify(self, seqs: list[Sequence]):
+        """2.2: 变长 prefill 式 verify. 每条输入 = [last]+drafts, 保留全部位置 logits."""
+        input_ids: list[int] = []
+        positions: list[int] = []
+        cu_seqlens_q = [0]
+        cu_seqlens_k = [0]
+        max_seqlen_q = 0
+        max_seqlen_k = 0
+        slot_mapping: list[int] = []
+        for seq in seqs:
+            ids = seq.verify_input_ids
+            assert ids is not None and len(ids) >= 1
+            start = seq.num_cached_tokens
+            seqlen_q = len(ids)
+            end = start + seqlen_q
+            seqlen_k = end
+            input_ids.extend(ids)
+            positions.extend(range(start, end))
+            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+            cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+            max_seqlen_q = max(seqlen_q, max_seqlen_q)
+            max_seqlen_k = max(seqlen_k, max_seqlen_k)
+            start_block = start // self.block_size
+            end_block = (end + self.block_size - 1) // self.block_size
+            for i in range(start_block, end_block):
+                slot_start = seq.block_table[i] * self.block_size
+                if i == start_block:
+                    slot_start += start % self.block_size
+                if i != end_block - 1:
+                    slot_end = seq.block_table[i] * self.block_size + self.block_size
+                else:
+                    slot_end = seq.block_table[i] * self.block_size + end - i * self.block_size
+                slot_mapping.extend(range(slot_start, slot_end))
+        block_tables = self.prepare_block_tables(seqs)
+        input_ids_t = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        positions_t = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_q_t = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_k_t = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping_t = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        set_context(
+            True, cu_seqlens_q_t, cu_seqlens_k_t, max_seqlen_q, max_seqlen_k,
+            slot_mapping_t, None, block_tables,
+            gather_last_logit_only=False,
+        )
+        return input_ids_t, positions_t, cu_seqlens_q
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
@@ -211,10 +303,88 @@ class ModelRunner:
             graph.replay()
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
+    @torch.inference_mode()
+    def run_model_graph(self, batch_size: int):
+        graph = self.graphs[next(x for x in self.graph_bs if x >= batch_size)]
+        graph.replay()
+        return self.model.compute_logits(self.graph_vars["outputs"][:batch_size])
+
+    def _prepare_ngram_drafts(self, seqs: list[Sequence], block_manager) -> None:
+        """在 rank0 填 draft; TP worker 侧 verify_input_ids 已随 pickle 到达."""
+        cfg = self.config
+        for seq in seqs:
+            # 非贪心: 不做投机, 退化为单 token verify
+            room = seq.max_tokens - seq.num_completion_tokens
+            if seq.temperature >= 1e-5 or room <= 0:
+                drafts: list[int] = []
+            else:
+                max_draft = min(cfg.ngram_prompt_lookup_max, max(0, room - 1))
+                drafts = propose_ngram_drafts(
+                    seq.token_ids,
+                    max_draft,
+                    min_ngram=cfg.ngram_prompt_lookup_min,
+                    max_ngram=cfg.ngram_max_ngram_size,
+                )
+            # 需要写入 last + 全部 draft (拒绝位的 KV 稍后逻辑忽略)
+            while drafts and not block_manager.ensure_write_capacity(seq, 1 + len(drafts)):
+                drafts = drafts[:-1]
+            if not block_manager.ensure_write_capacity(seq, 1):
+                raise RuntimeError("unable to reserve KV slot for decode")
+            seq.verify_input_ids = [seq.last_token] + drafts
+            seq.num_draft_tokens = len(drafts)
+            seq.num_scheduled_tokens = 1 + len(drafts)
+            seq.is_prefill = True  # pickle 走完整路径时带上 verify_input_ids
+
+    @torch.inference_mode()
+    def run_ngram(self, seqs: list[Sequence]) -> list[list[int]]:
+        """2.2 n-gram verify: 逐条 prefill 式多 token 前向 + 贪心前缀接受.
+
+        逐条而非 pack 多 seq, 避免 batch verify 交叉干扰.
+        与严格逐步 AR 在长生成上可能有数值分叉; 短生成/重复文本场景下与 HF 对齐.
+        """
+        out: list[list[int]] | None = [] if self.rank == 0 else None
+        for seq in seqs:
+            input_ids, positions, _cu = self.prepare_verify([seq])
+            logits = self.run_model(input_ids, positions, is_prefill=True)
+            if self.rank == 0:
+                assert logits is not None
+                drafts = seq.verify_input_ids[1:]
+                if seq.temperature < 1e-5:
+                    tokens, accepted = accept_greedy_drafts(logits, drafts)
+                else:
+                    temps = torch.tensor([seq.temperature], device=logits.device, dtype=torch.float32)
+                    tok = self.sampler(logits[-1:], temps).item()
+                    tokens, accepted = [tok], 0
+                room = seq.max_tokens - seq.num_completion_tokens
+                if len(tokens) > room:
+                    tokens = tokens[:room]
+                    accepted = min(accepted, max(0, len(tokens) - 1))
+                seq.num_accepted_drafts = accepted
+                out.append(tokens)
+            reset_context()
+        for seq in seqs:
+            seq.is_prefill = False
+        return out
+
+    @torch.inference_mode()
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-        logits = self.run_model(input_ids, positions, is_prefill)
+        use_graph_decode = (
+            (not is_prefill)
+            and (not self.enforce_eager)
+            and self.decode_input_batch is not None
+            and len(seqs) <= 512
+        )
+        if use_graph_decode:
+            view = self.prepare_decode_graph(seqs)
+            temperatures = (
+                self.decode_input_batch.copy_temperatures_to_gpu(view.batch_size)
+                if self.rank == 0 else None
+            )
+            logits = self.run_model_graph(view.batch_size)
+        else:
+            input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+            temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+            logits = self.run_model(input_ids, positions, is_prefill)
         token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
         return token_ids

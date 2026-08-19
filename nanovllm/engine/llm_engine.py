@@ -35,22 +35,51 @@ class LLMEngine:
         atexit.register(self.exit)
 
     def exit(self):
+        if not hasattr(self, "model_runner"):
+            return
         self.model_runner.call("exit")
         del self.model_runner
         for p in self.ps:
             p.join()
 
+    def reset_metrics(self):
+        self.scheduler.metrics.reset()
+
+    def clear_prefix_cache(self):
+        assert self.is_finished(), "clear_prefix_cache requires idle engine"
+        self.scheduler.block_manager.clear_prefix_cache()
+
+    def get_metrics(self) -> dict:
+        return self.scheduler.metrics.summary()
+
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
         seq = Sequence(prompt, sampling_params)
+        seq.arrival_time = perf_counter()
         self.scheduler.add(seq)
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
-        num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        if (not is_prefill) and self.scheduler.enable_ngram:
+            self.model_runner._prepare_ngram_drafts(seqs, self.scheduler.block_manager)
+            token_lists = self.model_runner.call("run_ngram", seqs)
+            self.scheduler.postprocess_ngram(seqs, token_lists)
+            num_tokens = -sum(len(t) for t in token_lists)
+        else:
+            num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
+            token_ids = self.model_runner.call("run", seqs, is_prefill)
+            self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        now = perf_counter()
+        for seq in seqs:
+            if seq.num_completion_tokens >= 1 and seq.first_token_time is None:
+                seq.first_token_time = now
+            if seq.is_finished:
+                seq.finish_time = now
+                ttft = seq.first_token_time - seq.arrival_time
+                n = seq.num_completion_tokens
+                tpot = ((seq.finish_time - seq.first_token_time) / (n - 1)) if n > 1 else None
+                self.scheduler.metrics.note_finished(ttft, tpot)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         return outputs, num_tokens
 

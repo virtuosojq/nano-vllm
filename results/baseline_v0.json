@@ -1,0 +1,326 @@
+{
+  "meta": {
+    "timestamp": "2026-08-19 20:07:40",
+    "git_commit": "a5fa446",
+    "model": "/root/autodl-tmp/huggingface/Qwen3-0.6B/",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false
+    }
+  },
+  "suites": {
+    "correctness": {
+      "temperature": 1e-06,
+      "fingerprints": {
+        "The capital of France is": "c09af54136fe382f",
+        "def quicksort(arr):": "60a72873bd33069e",
+        "1 + 2 + 3 + ... + 100 =": "f79fab010a7e037f",
+        "Translate to Chinese: The quick brown fox jumps over the lazy dog.": "7b642a063a55af92"
+      },
+      "sample_text": " Paris. The capital of Italy is Rome. The capital of Spain is Madrid. The capital of China is Beijing. The capital of Japan is Tokyo. The capital of India is New Delhi. The capital of Brazil is Brasil"
+    },
+    "throughput": {
+      "num_seqs": 256,
+      "total_time_s": 21.772,
+      "total_completion_tokens": 133966,
+      "throughput_tok_s": 6153.2,
+      "prefill_tokens": 182613,
+      "decode_tokens": 133625,
+      "ttft_ms": {
+        "mean": 696.23,
+        "p50": 717.47,
+        "p90": 1143.11,
+        "p99": 1270.54
+      },
+      "tpot_ms": {
+        "mean": 26.9,
+        "p50": 26.68,
+        "p90": 31.15,
+        "p99": 49.95
+      },
+      "e2e_latency_s": {
+        "mean": 13.71,
+        "p50": 14.285,
+        "p90": 20.518,
+        "p99": 21.055
+      },
+      "step_time_ms": {
+        "mean": 15.52,
+        "p50": 16.84,
+        "p90": 23.15,
+        "p99": 23.67
+      }
+    },
+    "latency": {
+      "batch_1": {
+        "num_seqs": 1,
+        "total_time_s": 0.312,
+        "total_completion_tokens": 128,
+        "throughput_tok_s": 410.27,
+        "prefill_tokens": 128,
+        "decode_tokens": 127,
+        "ttft_ms": {
+          "mean": 22.37,
+          "p50": 22.37,
+          "p90": 22.37,
+          "p99": 22.37
+        },
+        "tpot_ms": {
+          "mean": 2.28,
+          "p50": 2.28,
+          "p90": 2.28,
+          "p99": 2.28
+        },
+        "e2e_latency_s": {
+          "mean": 0.312,
+          "p50": 0.312,
+          "p90": 0.312,
+          "p99": 0.312
+        },
+        "step_time_ms": {
+          "mean": 2.44,
+          "p50": 2.28,
+          "p90": 2.29,
+          "p99": 2.36
+        }
+      },
+      "batch_8": {
+        "num_seqs": 8,
+        "total_time_s": 0.353,
+        "total_completion_tokens": 1024,
+        "throughput_tok_s": 2897.66,
+        "prefill_tokens": 1024,
+        "decode_tokens": 1016,
+        "ttft_ms": {
+          "mean": 19.66,
+          "p50": 19.66,
+          "p90": 19.66,
+          "p99": 19.66
+        },
+        "tpot_ms": {
+          "mean": 2.63,
+          "p50": 2.63,
+          "p90": 2.63,
+          "p99": 2.63
+        },
+        "e2e_latency_s": {
+          "mean": 0.353,
+          "p50": 0.353,
+          "p90": 0.353,
+          "p99": 0.353
+        },
+        "step_time_ms": {
+          "mean": 2.76,
+          "p50": 2.62,
+          "p90": 2.66,
+          "p99": 2.71
+        }
+      },
+      "batch_64": {
+        "num_seqs": 64,
+        "total_time_s": 0.592,
+        "total_completion_tokens": 8192,
+        "throughput_tok_s": 13829.18,
+        "prefill_tokens": 8192,
+        "decode_tokens": 8128,
+        "ttft_ms": {
+          "mean": 68.1,
+          "p50": 68.1,
+          "p90": 68.1,
+          "p99": 68.1
+        },
+        "tpot_ms": {
+          "mean": 4.13,
+          "p50": 4.13,
+          "p90": 4.13,
+          "p99": 4.13
+        },
+        "e2e_latency_s": {
+          "mean": 0.592,
+          "p50": 0.592,
+          "p90": 0.592,
+          "p99": 0.592
+        },
+        "step_time_ms": {
+          "mean": 4.62,
+          "p50": 4.07,
+          "p90": 4.53,
+          "p99": 4.8
+        }
+      }
+    },
+    "prefix_cache": {
+      "shared_prefix": {
+        "num_seqs": 32,
+        "total_time_s": 0.331,
+        "total_completion_tokens": 1024,
+        "throughput_tok_s": 3094.22,
+        "prefill_tokens": 16384,
+        "decode_tokens": 992,
+        "ttft_ms": {
+          "mean": 155.77,
+          "p50": 166.07,
+          "p90": 166.07,
+          "p99": 166.07
+        },
+        "tpot_ms": {
+          "mean": 5.65,
+          "p50": 5.32,
+          "p90": 6.03,
+          "p99": 6.03
+        },
+        "e2e_latency_s": {
+          "mean": 0.331,
+          "p50": 0.331,
+          "p90": 0.331,
+          "p99": 0.331
+        },
+        "step_time_ms": {
+          "mean": 10.02,
+          "p50": 5.32,
+          "p90": 5.37,
+          "p99": 104.93
+        }
+      },
+      "no_shared_prefix": {
+        "num_seqs": 32,
+        "total_time_s": 0.525,
+        "total_completion_tokens": 1024,
+        "throughput_tok_s": 1951.39,
+        "prefill_tokens": 33792,
+        "decode_tokens": 992,
+        "ttft_ms": {
+          "mean": 222.07,
+          "p50": 288.27,
+          "p90": 288.27,
+          "p99": 308.6
+        },
+        "tpot_ms": {
+          "mean": 9.76,
+          "p50": 7.63,
+          "p90": 12.27,
+          "p99": 12.27
+        },
+        "e2e_latency_s": {
+          "mean": 0.525,
+          "p50": 0.525,
+          "p90": 0.525,
+          "p99": 0.525
+        },
+        "step_time_ms": {
+          "mean": 15.43,
+          "p50": 6.97,
+          "p90": 7.14,
+          "p99": 144.11
+        }
+      },
+      "prefix_cache_speedup": 1.586
+    },
+    "serving": {
+      "slo": {
+        "ttft_ms": 500.0,
+        "tpot_ms": 50.0
+      },
+      "rate_2": {
+        "num_requests": 128,
+        "total_time_s": 66.896,
+        "request_throughput": 1.913,
+        "ttft_ms": {
+          "mean": 19.1,
+          "p50": 18.92,
+          "p90": 20.14,
+          "p99": 22.06
+        },
+        "tpot_ms": {
+          "mean": 3.01,
+          "p50": 3.05,
+          "p90": 3.24,
+          "p99": 3.35
+        },
+        "e2e_latency_s": {
+          "mean": 1.599,
+          "p50": 1.583,
+          "p90": 2.639,
+          "p99": 3.077
+        },
+        "injection_lag_ms": {
+          "mean": 1.53,
+          "p50": 1.33,
+          "p90": 2.66,
+          "p99": 6.88
+        },
+        "goodput_req_s": 1.913,
+        "slo_attainment": 1.0
+      },
+      "rate_4": {
+        "num_requests": 128,
+        "total_time_s": 33.454,
+        "request_throughput": 3.826,
+        "ttft_ms": {
+          "mean": 18.57,
+          "p50": 18.4,
+          "p90": 19.61,
+          "p99": 20.12
+        },
+        "tpot_ms": {
+          "mean": 3.74,
+          "p50": 3.85,
+          "p90": 4.27,
+          "p99": 4.51
+        },
+        "e2e_latency_s": {
+          "mean": 1.896,
+          "p50": 1.915,
+          "p90": 3.324,
+          "p99": 3.987
+        },
+        "injection_lag_ms": {
+          "mean": 1.75,
+          "p50": 1.42,
+          "p90": 3.07,
+          "p99": 8.47
+        },
+        "goodput_req_s": 3.826,
+        "slo_attainment": 1.0
+      },
+      "rate_8": {
+        "num_requests": 128,
+        "total_time_s": 18.793,
+        "request_throughput": 6.811,
+        "ttft_ms": {
+          "mean": 18.69,
+          "p50": 18.49,
+          "p90": 19.56,
+          "p99": 22.32
+        },
+        "tpot_ms": {
+          "mean": 8.46,
+          "p50": 9.14,
+          "p90": 9.74,
+          "p99": 10.0
+        },
+        "e2e_latency_s": {
+          "mean": 5.211,
+          "p50": 5.368,
+          "p90": 8.008,
+          "p99": 9.557
+        },
+        "injection_lag_ms": {
+          "mean": 4.25,
+          "p50": 3.07,
+          "p90": 8.77,
+          "p99": 15.07
+        },
+        "goodput_req_s": 6.811,
+        "slo_attainment": 1.0
+      }
+    }
+  }
+}

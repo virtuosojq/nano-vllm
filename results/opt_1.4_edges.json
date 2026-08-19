@@ -1,0 +1,80 @@
+{
+  "meta": {
+    "timestamp": "2026-08-19 21:00:04",
+    "git_commit": "a5fa446",
+    "model": "/root/autodl-tmp/huggingface/Qwen3-0.6B/",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "repeats": 1,
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false
+    }
+  },
+  "suites": {
+    "edge_cases": {
+      "n_repeats": 1,
+      "median": {
+        "cases": [
+          {
+            "name": "#211 preempt resume schedule",
+            "status": "pass",
+            "detail": "cached=256 scheduled=155 bt=2"
+          },
+          {
+            "name": "#211 may_append no over-allocate",
+            "status": "pass",
+            "detail": "bt stayed [0, 3] (== num_blocks 2)"
+          },
+          {
+            "name": "#211 normal growth still allocates",
+            "status": "pass",
+            "detail": "bt=[0, 1]"
+          },
+          {
+            "name": "#114 exact block_size",
+            "status": "not_applicable",
+            "detail": "no crash; #218 caps cache at num_blocks-1 so seqlen_q never 0"
+          },
+          {
+            "name": "#199 multi-block full hit",
+            "status": "not_applicable",
+            "detail": "no crash; #218 caps cache at num_blocks-1 so seqlen_q never 0"
+          },
+          {
+            "name": "#240 may_append off-by-one",
+            "status": "not_applicable",
+            "detail": "cross-boundary decode OK; ==1 is correct given postprocess-before-next-schedule order"
+          },
+          {
+            "name": "#211 gpu multi-seq",
+            "status": "pass",
+            "detail": "finished 24 seqs"
+          }
+        ],
+        "num_fail": 0,
+        "ok": true
+      },
+      "range": {}
+    },
+    "correctness": {
+      "n_repeats": 1,
+      "median": {
+        "temperature": 0.0,
+        "fingerprints": {
+          "The capital of France is": "7ad27c65ccd97ed7",
+          "def quicksort(arr):": "60a72873bd33069e",
+          "1 + 2 + 3 + ... + 100 =": "f79fab010a7e037f",
+          "Translate to Chinese: The quick brown fox jumps over the lazy dog.": "7b642a063a55af92"
+        },
+        "sample_text": " Paris. The capital of France is also the capital of the Republic of France. The capital of France is also the capital of the European Union. The capital of France is also the capital of the United Na"
+      },
+      "range": {}
+    }
+  }
+}

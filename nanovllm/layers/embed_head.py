@@ -63,13 +63,13 @@ class ParallelLMHead(VocabParallelEmbedding):
         super().__init__(num_embeddings, embedding_dim)
 
     def forward(self, x: torch.Tensor):
-        # x: [N, H] (decode) 或 [N, H] (prefill, 需取末 token)
+        # x: [N, H] (decode) 或 [N, H] (prefill, 默认取末 token; verify 保留全部)
         context = get_context()
-        if context.is_prefill:
-            # prefill: 每条序列只需最后一个 token 的 logits
+        if context.is_prefill and context.gather_last_logit_only:
+            # 普通 prefill: 每条序列只需最后一个 token 的 logits
             last_indices = context.cu_seqlens_q[1:] - 1   # 每条序列末 token 的位置
             x = x[last_indices].contiguous()              # [S, H]
-        logits = F.linear(x, self.weight)                 # [S, V/tp]
+        logits = F.linear(x, self.weight)                 # [S or N, V/tp]
         if self.tp_size > 1:
             # gather 到 rank0: rank0 拼成完整词表 logits, 其它卡返回 None
             all_logits = [torch.empty_like(logits) for _ in range(self.tp_size)] if self.tp_rank == 0 else None

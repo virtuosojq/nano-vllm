@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "timestamp": "2026-08-19 20:35:29",
+    "git_commit": "a5fa446",
+    "model": "/root/autodl-tmp/huggingface/Qwen3-0.6B/",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false
+    }
+  },
+  "suites": {
+    "correctness": {
+      "temperature": 0.0,
+      "fingerprints": {
+        "The capital of France is": "7ad27c65ccd97ed7",
+        "def quicksort(arr):": "60a72873bd33069e",
+        "1 + 2 + 3 + ... + 100 =": "f79fab010a7e037f",
+        "Translate to Chinese: The quick brown fox jumps over the lazy dog.": "7b642a063a55af92"
+      },
+      "sample_text": " Paris. The capital of France is also the capital of the Republic of France. The capital of France is also the capital of the European Union. The capital of France is also the capital of the United Na"
+    }
+  }
+}

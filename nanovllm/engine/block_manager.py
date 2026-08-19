@@ -101,11 +101,33 @@ class BlockManager:
         seq.block_table.clear()
 
     def can_append(self, seq: Sequence) -> bool:
-        return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
+        # 需要新块当且仅当: 当前长度落在新块首槽, 且 block_table 尚未覆盖 num_blocks
+        # (抢占后 re-allocate 可能已按 num_blocks 备好块, 见上游 #211)
+        need_block = (
+            len(seq) % self.block_size == 1
+            and len(seq.block_table) < seq.num_blocks
+        )
+        return len(self.free_block_ids) >= need_block
 
     def may_append(self, seq: Sequence):
-        if len(seq) % self.block_size == 1:
+        if (
+            len(seq) % self.block_size == 1
+            and len(seq.block_table) < seq.num_blocks
+        ):
             seq.block_table.append(self._allocate_block())
+
+    def ensure_write_capacity(self, seq: Sequence, num_write_tokens: int) -> bool:
+        """保证能写入从 num_cached_tokens 起的 num_write_tokens 个槽 (2.2 verify)."""
+        if num_write_tokens <= 0:
+            return True
+        start = seq.num_cached_tokens
+        end = start + num_write_tokens
+        need_blocks = (end + self.block_size - 1) // self.block_size
+        while len(seq.block_table) < need_blocks:
+            if not self.free_block_ids:
+                return False
+            seq.block_table.append(self._allocate_block())
+        return True
 
     def hash_blocks(self, seq: Sequence):
         start = seq.num_cached_tokens // self.block_size
@@ -118,3 +140,10 @@ class BlockManager:
             h = self.compute_hash(token_ids, h)
             block.update(h, token_ids)
             self.hash_to_block_id[h] = block.block_id
+
+    def clear_prefix_cache(self):
+        """清空前缀哈希表 (引擎空闲时调用, 保证各次测量独立)."""
+        self.hash_to_block_id.clear()
+        for block in self.blocks:
+            block.hash = -1
+            block.token_ids = []

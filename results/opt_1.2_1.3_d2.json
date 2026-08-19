@@ -1,0 +1,802 @@
+{
+  "meta": {
+    "timestamp": "2026-08-19 20:48:43",
+    "git_commit": "a5fa446",
+    "model": "/root/autodl-tmp/huggingface/Qwen3-0.6B/",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "repeats": 3,
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false
+    }
+  },
+  "suites": {
+    "correctness": {
+      "n_repeats": 3,
+      "median": {
+        "temperature": 0.0,
+        "fingerprints": {
+          "The capital of France is": "7ad27c65ccd97ed7",
+          "def quicksort(arr):": "60a72873bd33069e",
+          "1 + 2 + 3 + ... + 100 =": "f79fab010a7e037f",
+          "Translate to Chinese: The quick brown fox jumps over the lazy dog.": "7b642a063a55af92"
+        },
+        "sample_text": " Paris. The capital of France is also the capital of the Republic of France. The capital of France is also the capital of the European Union. The capital of France is also the capital of the United Na"
+      },
+      "range": {}
+    },
+    "prefix_cache": {
+      "n_repeats": 3,
+      "median": {
+        "shared_prefix": {
+          "num_seqs": 32.0,
+          "total_time_s": 0.328,
+          "total_completion_tokens": 1024.0,
+          "throughput_tok_s": 3123.78,
+          "prefill_tokens": 16384.0,
+          "decode_tokens": 992.0,
+          "ttft_ms": {
+            "mean": 153.32,
+            "p50": 162.61,
+            "p90": 162.61,
+            "p99": 162.61
+          },
+          "tpot_ms": {
+            "mean": 5.63,
+            "p50": 5.32,
+            "p90": 5.97,
+            "p99": 5.97
+          },
+          "itl_ms": {
+            "mean": 5.63,
+            "p50": 5.31,
+            "p90": 5.34,
+            "p99": 25.18
+          },
+          "e2e_latency_s": {
+            "mean": 0.328,
+            "p50": 0.328,
+            "p90": 0.328,
+            "p99": 0.328
+          },
+          "step_time_ms": {
+            "mean": 9.92,
+            "p50": 5.3,
+            "p90": 5.35,
+            "p99": 103.36
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.425,
+            "prefix_hit_blocks": 68.0,
+            "prefix_req_blocks": 160.0,
+            "kv_utilization": {
+              "mean": 0.1311,
+              "peak": 0.1318,
+              "num_samples": 33.0
+            },
+            "request_ttft_ms": {
+              "mean": 153.25,
+              "p50": 162.49,
+              "p90": 162.53,
+              "p99": 162.54
+            },
+            "request_tpot_ms": {
+              "mean": 5.62,
+              "p50": 5.32,
+              "p90": 5.96,
+              "p99": 5.96
+            },
+            "num_finished_requests": 32.0
+          }
+        },
+        "no_shared_prefix": {
+          "num_seqs": 32.0,
+          "total_time_s": 0.521,
+          "total_completion_tokens": 1024.0,
+          "throughput_tok_s": 1964.05,
+          "prefill_tokens": 33792.0,
+          "decode_tokens": 992.0,
+          "ttft_ms": {
+            "mean": 220.04,
+            "p50": 285.65,
+            "p90": 285.65,
+            "p99": 305.62
+          },
+          "tpot_ms": {
+            "mean": 9.72,
+            "p50": 7.6,
+            "p90": 12.2,
+            "p99": 12.2
+          },
+          "itl_ms": {
+            "mean": 9.72,
+            "p50": 6.96,
+            "p90": 7.0,
+            "p99": 169.55
+          },
+          "e2e_latency_s": {
+            "mean": 0.521,
+            "p50": 0.521,
+            "p90": 0.521,
+            "p99": 0.521
+          },
+          "step_time_ms": {
+            "mean": 15.32,
+            "p50": 6.95,
+            "p90": 7.11,
+            "p99": 142.8
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 160.0,
+            "kv_utilization": {
+              "mean": 0.2252,
+              "peak": 0.2292,
+              "num_samples": 34.0
+            },
+            "request_ttft_ms": {
+              "mean": 219.97,
+              "p50": 285.52,
+              "p90": 285.57,
+              "p99": 305.48
+            },
+            "request_tpot_ms": {
+              "mean": 9.72,
+              "p50": 7.6,
+              "p90": 12.2,
+              "p99": 12.2
+            },
+            "num_finished_requests": 32.0
+          }
+        },
+        "prefix_cache_speedup": 1.588
+      },
+      "range": {
+        "shared_prefix": {
+          "num_seqs": 0.0,
+          "total_time_s": 0.004,
+          "total_completion_tokens": 0.0,
+          "throughput_tok_s": 39.5,
+          "prefill_tokens": 0.0,
+          "decode_tokens": 0.0,
+          "ttft_ms": {
+            "mean": 2.53,
+            "p50": 4.11,
+            "p90": 4.11,
+            "p99": 4.11
+          },
+          "tpot_ms": {
+            "mean": 0.05,
+            "p50": 0.01,
+            "p90": 0.11,
+            "p99": 0.11
+          },
+          "itl_ms": {
+            "mean": 0.05,
+            "p50": 0.02,
+            "p90": 0.02,
+            "p99": 3.48
+          },
+          "e2e_latency_s": {
+            "mean": 0.004,
+            "p50": 0.004,
+            "p90": 0.004,
+            "p99": 0.004
+          },
+          "step_time_ms": {
+            "mean": 0.13,
+            "p50": 0.02,
+            "p90": 0.11,
+            "p99": 1.54
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 0.0,
+            "kv_utilization": {
+              "mean": 0.0,
+              "peak": 0.0,
+              "num_samples": 0.0
+            },
+            "request_ttft_ms": {
+              "mean": 2.5,
+              "p50": 4.05,
+              "p90": 4.08,
+              "p99": 4.08
+            },
+            "request_tpot_ms": {
+              "mean": 0.06,
+              "p50": 0.01,
+              "p90": 0.11,
+              "p99": 0.11
+            },
+            "num_finished_requests": 0.0
+          }
+        },
+        "no_shared_prefix": {
+          "num_seqs": 0.0,
+          "total_time_s": 0.001,
+          "total_completion_tokens": 0.0,
+          "throughput_tok_s": 2.69,
+          "prefill_tokens": 0.0,
+          "decode_tokens": 0.0,
+          "ttft_ms": {
+            "mean": 0.28,
+            "p50": 0.45,
+            "p90": 0.45,
+            "p99": 0.46
+          },
+          "tpot_ms": {
+            "mean": 0.02,
+            "p50": 0.01,
+            "p90": 0.02,
+            "p99": 0.02
+          },
+          "itl_ms": {
+            "mean": 0.02,
+            "p50": 0.01,
+            "p90": 0.02,
+            "p99": 0.39
+          },
+          "e2e_latency_s": {
+            "mean": 0.001,
+            "p50": 0.001,
+            "p90": 0.001,
+            "p99": 0.001
+          },
+          "step_time_ms": {
+            "mean": 0.02,
+            "p50": 0.01,
+            "p90": 0.01,
+            "p99": 0.24
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 0.0,
+            "kv_utilization": {
+              "mean": 0.0,
+              "peak": 0.0,
+              "num_samples": 0.0
+            },
+            "request_ttft_ms": {
+              "mean": 0.28,
+              "p50": 0.46,
+              "p90": 0.45,
+              "p99": 0.46
+            },
+            "request_tpot_ms": {
+              "mean": 0.01,
+              "p50": 0.01,
+              "p90": 0.02,
+              "p99": 0.02
+            },
+            "num_finished_requests": 0.0
+          }
+        },
+        "prefix_cache_speedup": 0.022
+      }
+    },
+    "mixed": {
+      "n_repeats": 3,
+      "median": {
+        "num_seqs": 32.0,
+        "total_time_s": 1.029,
+        "total_completion_tokens": 4608.0,
+        "throughput_tok_s": 4476.23,
+        "prefill_tokens": 17408.0,
+        "decode_tokens": 4576.0,
+        "ttft_ms": {
+          "mean": 154.52,
+          "p50": 154.52,
+          "p90": 163.63,
+          "p99": 163.63
+        },
+        "tpot_ms": {
+          "mean": 4.51,
+          "p50": 4.51,
+          "p90": 5.62,
+          "p99": 5.62
+        },
+        "itl_ms": {
+          "mean": 3.64,
+          "p50": 3.19,
+          "p90": 5.02,
+          "p99": 5.18
+        },
+        "e2e_latency_s": {
+          "mean": 0.674,
+          "p50": 0.674,
+          "p90": 1.029,
+          "p99": 1.029
+        },
+        "step_time_ms": {
+          "mean": 4.0,
+          "p50": 3.16,
+          "p90": 4.99,
+          "p99": 5.11
+        },
+        "engine_metrics": {
+          "prefix_cache_hit_rate": 0.0,
+          "prefix_hit_blocks": 0.0,
+          "prefix_req_blocks": 80.0,
+          "kv_utilization": {
+            "mean": 0.043,
+            "peak": 0.1375,
+            "num_samples": 257.0
+          },
+          "request_ttft_ms": {
+            "mean": 154.45,
+            "p50": 154.46,
+            "p90": 163.54,
+            "p99": 163.54
+          },
+          "request_tpot_ms": {
+            "mean": 4.5,
+            "p50": 4.5,
+            "p90": 5.61,
+            "p99": 5.61
+          },
+          "num_finished_requests": 32.0
+        },
+        "mix": {
+          "num_long_prefill": 16.0,
+          "num_long_decode": 16.0,
+          "long_prefill_prompt_len": 1024.0,
+          "long_prefill_max_tokens": 32.0,
+          "long_decode_prompt_len": 64.0,
+          "long_decode_max_tokens": 256.0
+        }
+      },
+      "range": {
+        "num_seqs": 0.0,
+        "total_time_s": 0.003,
+        "total_completion_tokens": 0.0,
+        "throughput_tok_s": 14.34,
+        "prefill_tokens": 0.0,
+        "decode_tokens": 0.0,
+        "ttft_ms": {
+          "mean": 0.7,
+          "p50": 0.7,
+          "p90": 1.42,
+          "p99": 1.42
+        },
+        "tpot_ms": {
+          "mean": 0.03,
+          "p50": 0.03,
+          "p90": 0.05,
+          "p99": 0.05
+        },
+        "itl_ms": {
+          "mean": 0.02,
+          "p50": 0.01,
+          "p90": 0.01,
+          "p99": 0.02
+        },
+        "e2e_latency_s": {
+          "mean": 0.003,
+          "p50": 0.003,
+          "p90": 0.003,
+          "p99": 0.003
+        },
+        "step_time_ms": {
+          "mean": 0.01,
+          "p50": 0.02,
+          "p90": 0.01,
+          "p99": 0.02
+        },
+        "engine_metrics": {
+          "prefix_cache_hit_rate": 0.0,
+          "prefix_hit_blocks": 0.0,
+          "prefix_req_blocks": 0.0,
+          "kv_utilization": {
+            "mean": 0.0,
+            "peak": 0.0,
+            "num_samples": 0.0
+          },
+          "request_ttft_ms": {
+            "mean": 0.7,
+            "p50": 0.71,
+            "p90": 1.42,
+            "p99": 1.43
+          },
+          "request_tpot_ms": {
+            "mean": 0.03,
+            "p50": 0.03,
+            "p90": 0.05,
+            "p99": 0.05
+          },
+          "num_finished_requests": 0.0
+        },
+        "mix": {
+          "num_long_prefill": 0.0,
+          "num_long_decode": 0.0,
+          "long_prefill_prompt_len": 0.0,
+          "long_prefill_max_tokens": 0.0,
+          "long_decode_prompt_len": 0.0,
+          "long_decode_max_tokens": 0.0
+        }
+      }
+    },
+    "latency": {
+      "n_repeats": 3,
+      "median": {
+        "batch_1": {
+          "num_seqs": 1.0,
+          "total_time_s": 0.309,
+          "total_completion_tokens": 128.0,
+          "throughput_tok_s": 413.62,
+          "prefill_tokens": 128.0,
+          "decode_tokens": 127.0,
+          "ttft_ms": {
+            "mean": 19.27,
+            "p50": 19.27,
+            "p90": 19.27,
+            "p99": 19.27
+          },
+          "tpot_ms": {
+            "mean": 2.28,
+            "p50": 2.28,
+            "p90": 2.28,
+            "p99": 2.28
+          },
+          "itl_ms": {
+            "mean": 2.28,
+            "p50": 2.28,
+            "p90": 2.3,
+            "p99": 2.32
+          },
+          "e2e_latency_s": {
+            "mean": 0.309,
+            "p50": 0.309,
+            "p90": 0.309,
+            "p99": 0.309
+          },
+          "step_time_ms": {
+            "mean": 2.42,
+            "p50": 2.28,
+            "p90": 2.29,
+            "p99": 2.37
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 1.0,
+            "kv_utilization": {
+              "mean": 0.0014,
+              "peak": 0.0014,
+              "num_samples": 128.0
+            },
+            "request_ttft_ms": {
+              "mean": 19.26,
+              "p50": 19.26,
+              "p90": 19.26,
+              "p99": 19.26
+            },
+            "request_tpot_ms": {
+              "mean": 2.28,
+              "p50": 2.28,
+              "p90": 2.28,
+              "p99": 2.28
+            },
+            "num_finished_requests": 1.0
+          }
+        },
+        "batch_8": {
+          "num_seqs": 8.0,
+          "total_time_s": 0.353,
+          "total_completion_tokens": 1024.0,
+          "throughput_tok_s": 2902.69,
+          "prefill_tokens": 1024.0,
+          "decode_tokens": 1016.0,
+          "ttft_ms": {
+            "mean": 18.24,
+            "p50": 18.24,
+            "p90": 18.24,
+            "p99": 18.24
+          },
+          "tpot_ms": {
+            "mean": 2.63,
+            "p50": 2.63,
+            "p90": 2.63,
+            "p99": 2.63
+          },
+          "itl_ms": {
+            "mean": 2.63,
+            "p50": 2.63,
+            "p90": 2.67,
+            "p99": 2.71
+          },
+          "e2e_latency_s": {
+            "mean": 0.353,
+            "p50": 0.353,
+            "p90": 0.353,
+            "p99": 0.353
+          },
+          "step_time_ms": {
+            "mean": 2.75,
+            "p50": 2.62,
+            "p90": 2.67,
+            "p99": 2.71
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 8.0,
+            "kv_utilization": {
+              "mean": 0.0115,
+              "peak": 0.0115,
+              "num_samples": 128.0
+            },
+            "request_ttft_ms": {
+              "mean": 18.22,
+              "p50": 18.22,
+              "p90": 18.23,
+              "p99": 18.23
+            },
+            "request_tpot_ms": {
+              "mean": 2.63,
+              "p50": 2.63,
+              "p90": 2.63,
+              "p99": 2.63
+            },
+            "num_finished_requests": 8.0
+          }
+        },
+        "batch_64": {
+          "num_seqs": 64.0,
+          "total_time_s": 0.593,
+          "total_completion_tokens": 8192.0,
+          "throughput_tok_s": 13809.24,
+          "prefill_tokens": 8192.0,
+          "decode_tokens": 8128.0,
+          "ttft_ms": {
+            "mean": 67.81,
+            "p50": 67.81,
+            "p90": 67.81,
+            "p99": 67.81
+          },
+          "tpot_ms": {
+            "mean": 4.14,
+            "p50": 4.14,
+            "p90": 4.14,
+            "p99": 4.14
+          },
+          "itl_ms": {
+            "mean": 4.14,
+            "p50": 4.08,
+            "p90": 4.5,
+            "p99": 4.61
+          },
+          "e2e_latency_s": {
+            "mean": 0.593,
+            "p50": 0.593,
+            "p90": 0.593,
+            "p99": 0.593
+          },
+          "step_time_ms": {
+            "mean": 4.61,
+            "p50": 4.06,
+            "p90": 4.48,
+            "p99": 4.69
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 64.0,
+            "kv_utilization": {
+              "mean": 0.0917,
+              "peak": 0.0917,
+              "num_samples": 128.0
+            },
+            "request_ttft_ms": {
+              "mean": 67.74,
+              "p50": 67.74,
+              "p90": 67.78,
+              "p99": 67.79
+            },
+            "request_tpot_ms": {
+              "mean": 4.14,
+              "p50": 4.14,
+              "p90": 4.14,
+              "p99": 4.14
+            },
+            "num_finished_requests": 64.0
+          }
+        }
+      },
+      "range": {
+        "batch_1": {
+          "num_seqs": 0.0,
+          "total_time_s": 0.001,
+          "total_completion_tokens": 0.0,
+          "throughput_tok_s": 0.74,
+          "prefill_tokens": 0.0,
+          "decode_tokens": 0.0,
+          "ttft_ms": {
+            "mean": 0.52,
+            "p50": 0.52,
+            "p90": 0.52,
+            "p99": 0.52
+          },
+          "tpot_ms": {
+            "mean": 0.01,
+            "p50": 0.01,
+            "p90": 0.01,
+            "p99": 0.01
+          },
+          "itl_ms": {
+            "mean": 0.01,
+            "p50": 0.0,
+            "p90": 0.01,
+            "p99": 0.01
+          },
+          "e2e_latency_s": {
+            "mean": 0.001,
+            "p50": 0.001,
+            "p90": 0.001,
+            "p99": 0.001
+          },
+          "step_time_ms": {
+            "mean": 0.01,
+            "p50": 0.0,
+            "p90": 0.01,
+            "p99": 0.2
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 0.0,
+            "kv_utilization": {
+              "mean": 0.0,
+              "peak": 0.0,
+              "num_samples": 0.0
+            },
+            "request_ttft_ms": {
+              "mean": 0.52,
+              "p50": 0.52,
+              "p90": 0.52,
+              "p99": 0.52
+            },
+            "request_tpot_ms": {
+              "mean": 0.01,
+              "p50": 0.01,
+              "p90": 0.01,
+              "p99": 0.01
+            },
+            "num_finished_requests": 0.0
+          }
+        },
+        "batch_8": {
+          "num_seqs": 0.0,
+          "total_time_s": 0.003,
+          "total_completion_tokens": 0.0,
+          "throughput_tok_s": 22.31,
+          "prefill_tokens": 0.0,
+          "decode_tokens": 0.0,
+          "ttft_ms": {
+            "mean": 0.5,
+            "p50": 0.5,
+            "p90": 0.5,
+            "p99": 0.5
+          },
+          "tpot_ms": {
+            "mean": 0.02,
+            "p50": 0.02,
+            "p90": 0.02,
+            "p99": 0.02
+          },
+          "itl_ms": {
+            "mean": 0.02,
+            "p50": 0.01,
+            "p90": 0.02,
+            "p99": 0.09
+          },
+          "e2e_latency_s": {
+            "mean": 0.003,
+            "p50": 0.003,
+            "p90": 0.003,
+            "p99": 0.003
+          },
+          "step_time_ms": {
+            "mean": 0.02,
+            "p50": 0.02,
+            "p90": 0.01,
+            "p99": 0.41
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 0.0,
+            "kv_utilization": {
+              "mean": 0.0,
+              "peak": 0.0,
+              "num_samples": 0.0
+            },
+            "request_ttft_ms": {
+              "mean": 0.51,
+              "p50": 0.51,
+              "p90": 0.51,
+              "p99": 0.5
+            },
+            "request_tpot_ms": {
+              "mean": 0.01,
+              "p50": 0.01,
+              "p90": 0.01,
+              "p99": 0.01
+            },
+            "num_finished_requests": 0.0
+          }
+        },
+        "batch_64": {
+          "num_seqs": 0.0,
+          "total_time_s": 0.0,
+          "total_completion_tokens": 0.0,
+          "throughput_tok_s": 12.98,
+          "prefill_tokens": 0.0,
+          "decode_tokens": 0.0,
+          "ttft_ms": {
+            "mean": 0.35,
+            "p50": 0.35,
+            "p90": 0.35,
+            "p99": 0.35
+          },
+          "tpot_ms": {
+            "mean": 0.01,
+            "p50": 0.01,
+            "p90": 0.01,
+            "p99": 0.01
+          },
+          "itl_ms": {
+            "mean": 0.01,
+            "p50": 0.01,
+            "p90": 0.03,
+            "p99": 0.06
+          },
+          "e2e_latency_s": {
+            "mean": 0.0,
+            "p50": 0.0,
+            "p90": 0.0,
+            "p99": 0.0
+          },
+          "step_time_ms": {
+            "mean": 0.0,
+            "p50": 0.02,
+            "p90": 0.03,
+            "p99": 0.06
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0.0,
+            "prefix_req_blocks": 0.0,
+            "kv_utilization": {
+              "mean": 0.0,
+              "peak": 0.0,
+              "num_samples": 0.0
+            },
+            "request_ttft_ms": {
+              "mean": 0.33,
+              "p50": 0.35,
+              "p90": 0.35,
+              "p99": 0.36
+            },
+            "request_tpot_ms": {
+              "mean": 0.01,
+              "p50": 0.01,
+              "p90": 0.01,
+              "p99": 0.01
+            },
+            "num_finished_requests": 0.0
+          }
+        }
+      }
+    }
+  }
+}

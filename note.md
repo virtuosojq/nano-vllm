@@ -292,3 +292,130 @@ decode 阶段 `N = S`（每序列 1 token），attention 走 `flash_attn_with_kv
 - 想懂 **Paged KV Cache 与 Attention** → 重点啃 `attention.py`（序号 6）
 - 想懂 **数据如何注入模型** → 看 `context.py`（序号 2）
 - 想懂 **权重如何加载与合并** → 看 `loader.py`（序号 10）
+
+---
+
+# 基准指标笔记：TTFT / ITL / TPOT
+
+LLM serving 延迟的三个常用时间指标（单位通常是 ms）：
+
+| 记号 | 全称 | 含义 |
+|------|------|------|
+| **TTFT** | Time To First Token | 发出请求 → **第一个**输出 token 到达 |
+| **ITL** | Inter-Token Latency | 相邻两个输出 token 之间的时间间隔（tokenᵢ → tokenᵢ₊₁） |
+| **TPOT** | Time Per Output Token | 输出阶段**平均**每 token 耗时（常接近 ITL 的均值） |
+
+关系简述：
+
+- decode 每产出一个新 token 打一次点，相邻两次的时间差 = 一条 **ITL**；ITL 是逐步序列，可看 P50/P90/P99。
+- **TPOT** 是整段生成的平均；**ITL 分布**更能暴露抖动。
+- **TTFT** 主要反映排队 + prefill；**ITL/TPOT** 主要反映 decode。
+
+长尾 ITL（P99）高，常见原因：prefill 抢占 decode、调度抖动、KV 分配/抢占、CPU 侧打包气泡等（对应计划里 1.3 报 ITL P99、2.4 看调度饿死 decode）。
+
+---
+
+# 基准指标笔记：P50 / P90 / P99
+
+延迟（或吞吐相关数值）的**百分位数**：把所有样本从小到大排序后，落在第 50% / 90% / 99% 位置上的值。
+
+| 记号 | 含义 | 直观理解 |
+|------|------|----------|
+| **P50** | 中位数 | 一半请求比这快，一半比这慢；看「典型体验」 |
+| **P90** | 第 90 百分位 | 90% 的请求 ≤ 这个值；开始暴露偏慢的尾巴 |
+| **P99** | 第 99 百分位 | 最慢那 1% 的门槛；看「长尾 / SLO 是否炸」 |
+
+举例：若 TTFT 的 P50=20ms、P90=80ms、P99=200ms，说明多数请求很快，但仍有约 1% 会到 200ms 量级。
+
+在本仓库 baseline（TTFT / TPOT / ITL）里：
+
+- 看吞吐优化 → 常盯 **P50**
+- 看服务稳定性、调度饿死 decode → 更看 **P99**（以及极差）
+
+---
+
+# 2.6 笔记：宿主侧 decode 打包消除（面试向）
+
+## 一句话
+
+> CUDA Graph 只消掉了 **GPU kernel launch**；decode 每步在 CPU 上 `torch.tensor` + pin + H2D 的元数据打包仍在同步路径上。2.6 用**常驻 pinned buffer + NumPy 打包 + 直接写入 graph 输入**，把这条 CPU 气泡压掉。
+
+## 问题从哪来
+
+小 batch decode 时 GPU 前向只要 ~1–2ms，CPU 侧「组 input_ids/positions/slots/block_tables」的占比很高。原路径每步：
+
+1. Python list 收集字段  
+2. `torch.tensor(..., pin_memory=True)` → 可能触发 host 分配  
+3. `.cuda()` 得到**临时** GPU tensor  
+4. 再 copy 进 CUDA Graph 的持久 buffer（二次拷贝）
+
+Graph 优化了 launch，**没优化第 2–4 步**。
+
+## 做法（对齐上游 PR #253）
+
+- 新增 `DecodeInputBatch`：启动时分配一组 pin_memory CPU 张量  
+- 零拷贝 `.numpy()` 视图上写元数据（避免 PyTorch 逐元素赋值的 dispatch）  
+- `copy_` 进 capture 时绑定的 `graph_vars`（无临时 GPU 元数据、无二次 D2D）  
+- Prefill / eager / bs>512 仍走旧路径
+
+## 受益怎么讲（面试口径）
+
+| 维度 | 内容 |
+|------|------|
+| **机制收益** | 稳态 decode：**不反复** `torch.tensor`/cudaHostAlloc；pinned `data_ptr` 跨 step 稳定；打包 CPU 更轻 |
+| **可观测数字** | 本机 bs1/8/64：thr 约 +0.4%～+1.6%，step_p50 约 −0.7%～−1.3%；**落在噪声边**（bs1 极差 ≥ 收益） |
+| **证据分层** | 主证据 = 架构/profiler 叙事（上游 nsys：稳态零 cudaMalloc）；辅证据 = 小幅正向 latency；**不把 +1% 当主 KPI** |
+| **和 2.4/2.1 关系** | 2.4 解决「谁先跑」；2.6 解决「decode 步 CPU 打包税」；若再做 2.1 overlap，须先 2.6 才能单独归因 |
+
+## 面试 30 秒稿
+
+「vLLM 类引擎开了 CUDA Graph 后，小 batch decode 的瓶颈常回到 **CPU 组 batch**。我做了常驻 pinned + NumPy 打包，直接写入 graph 输入，去掉每步临时 tensor。正确性指纹对齐；吞吐只有几个点且在噪声边，所以面试我强调 **profiler/分配语义**，而不是报虚高加速比。」
+
+---
+
+# 2.4 笔记：调度策略消融（面试主戏）
+
+> 完整演示卡见仓库根目录 `DEMO_2.4.md`。证据：`results/opt_2.4_schedule.json`。
+
+## 一句话
+
+> 默认 **prefill 绝对优先** 会在混合负载下饿死 decode（ITL 长尾）。用 `decode_priority` / `token_budget` 画出 **TTFT ↔ ITL/吞吐** 权衡，而不是追求峰值 tok/s。
+
+## 背表（三次中位数，mixed 16+16）
+
+| 策略 | thr | LP TTFT | LD ITL p99 |
+|------|-----|---------|------------|
+| prefill_priority | 4453 | 145 | **5.07** |
+| decode_priority | 4123 (−7%) | 145 | **3.50 (−31%)** |
+| budget 256→4096 | 1976→4397 | 736→97.5 | ~4–5 |
+
+## 30 秒稿
+
+「continuous batching 下 waiting 有 prefill 就不跑 decode，长 prompt 一来短请求 ITL 就抖。我加了策略开关：decode 优先把 LD ITL p99 从 5.1 打到 3.5，吞吐只掉几个点；再扫 token budget 给面试官看 TTFT–吞吐旋钮。主证据是这张消融表，不是单一加速比。」
+
+---
+
+# 2.2 笔记：n-gram / prompt-lookup 投机解码
+
+## 一句话
+
+> 用请求自身历史做 n-gram 续写当 draft，一次（逐条）前向验证；贪心接受前缀 + bonus。重复文本接受率高；并行 verify 与逐步 AR 在长生成上可能分叉。
+
+## 机制（面试口径）
+
+1. **Draft**：在 `token_ids` 里找与后缀匹配的 n-gram，取其后续 ≤K 个 token  
+2. **Verify**：输入 `[last]+drafts`，prefill 式变长前向，LMHead 保留全部位置 logits  
+3. **Accept**：贪心下 draft[i]==argmax 则接受；否则在拒绝位用 argmax（bonus）  
+4. **实现**：逐条 verify（不 pack 多 seq）；KV 只 commit `last+accepted`；T>0 回退普通 decode
+
+## 数字（本机）
+
+| 项 | 值 |
+|----|-----|
+| 重复文本 accept rate | **~0.89** |
+| warm tok/s | ~198 → ~227（约 +15%；首跑冷启动极差大） |
+| 正确性 | vs 关 ngram：`max_tokens≤40` exact-match；HF align：**≤40** 100%，64 可能在 ~40+ 分叉 |
+
+## 30 秒稿
+
+「投机解码我先做不需草稿模型的 n-gram：历史匹配提案，一次前向验证，讲清接受前缀和拒绝位重采样。重复文本接受率近 90%；并说明 paged KV 多 token verify 与逐步 AR 长生成可能分叉，对齐验收卡在 40 token。」
