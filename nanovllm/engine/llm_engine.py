@@ -61,13 +61,20 @@ class LLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        # hybrid 步返回 is_prefill=True, 因此不会进 ngram; 纯 decode 才可能投机
         if (not is_prefill) and self.scheduler.enable_ngram:
             self.model_runner._prepare_ngram_drafts(seqs, self.scheduler.block_manager)
             token_lists = self.model_runner.call("run_ngram", seqs)
             self.scheduler.postprocess_ngram(seqs, token_lists)
             num_tokens = -sum(len(t) for t in token_lists)
         else:
-            num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
+            # 在 postprocess 清零 num_scheduled_tokens 之前统计
+            n_pref = sum(s.num_scheduled_tokens for s in seqs if s.is_prefill)
+            n_dec = sum(1 for s in seqs if not s.is_prefill)
+            if n_pref > 0:
+                num_tokens = n_pref  # 含 hybrid: 进度条走 Prefill
+            else:
+                num_tokens = -n_dec
             token_ids = self.model_runner.call("run", seqs, is_prefill)
             self.scheduler.postprocess(seqs, token_ids, is_prefill)
         now = perf_counter()

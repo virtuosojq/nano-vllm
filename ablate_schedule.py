@@ -1,12 +1,13 @@
-"""2.4 调度策略消融: prefill_priority / decode_priority / token_budget.
+"""2.4/2.7 调度策略消融: prefill_priority / decode_priority / token_budget / hybrid.
 
 在相同 mixed 负载下对比:
   - long_prefill 组的 TTFT (长 prompt 短 decode)
   - long_decode 组的 TPOT / ITL P99 (短 prompt 长 decode)
+  - hybrid (2.7): 同一步 P+D vs token_budget 轮转
 
 用法:
   python ablate_schedule.py
-  python ablate_schedule.py --repeats 3 --budgets 256 512 1024 2048
+  python ablate_schedule.py --repeats 3 --budgets 256 512 1024 2048 --save opt_2.7_hybrid
 """
 
 from __future__ import annotations
@@ -167,6 +168,7 @@ def make_engine(model: str, policy: str, budget: int) -> LLM:
         max_model_len=4096,
         schedule_policy=policy,
         prefill_token_budget=budget,
+        enable_ngram=False,  # 2.7: hybrid 与 ngram 互斥; 消融统一关掉
     )
 
 
@@ -175,7 +177,7 @@ def main() -> int:
     parser.add_argument("--model", default=os.environ.get("NANOVLLM_MODEL", DEFAULT_MODEL))
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--budgets", nargs="+", type=int, default=[256, 512, 1024, 2048, 4096])
-    parser.add_argument("--save", default="opt_2.4_schedule")
+    parser.add_argument("--save", default="opt_2.7_hybrid")
     args = parser.parse_args()
 
     configs: list[tuple[str, str, int]] = [
@@ -184,6 +186,8 @@ def main() -> int:
     ]
     for b in args.budgets:
         configs.append((f"token_budget_{b}", "token_budget", b))
+    # 2.7: 同一步 hybrid, budget=512 与默认 token_budget 对齐
+    configs.append(("hybrid_512", "hybrid", 512))
 
     report = {
         "meta": {
@@ -191,6 +195,7 @@ def main() -> int:
             "model": args.model,
             "repeats": args.repeats,
             "workload": "mixed 16x(1024→32) + 16x(64→256)",
+            "enable_ngram": False,
         },
         "points": {},
     }
@@ -207,6 +212,7 @@ def main() -> int:
             engine.scheduler.schedule_policy = policy
             engine.scheduler.prefill_token_budget = budget
             engine.scheduler._budget_turn_prefill = True
+            engine.scheduler.enable_ngram = False
             runs = []
             for i in range(args.repeats):
                 print(f"  repeat {i + 1}/{args.repeats}")

@@ -6,85 +6,194 @@ import triton.language as tl
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 from nanovllm.utils.context import get_context
 
+# 3.1: head_dim 内分组量化, 提升相对 per-head 的精度
+INT8_KV_GROUP_SIZE = 16
+
 
 @triton.jit
 def store_kvcache_kernel(
-    key_ptr,                 # K 张量基址 [N, kvₗ, D]
-    key_stride,              # K 第 0 维步长(跨 token)
-    value_ptr,               # V 张量基址
+    key_ptr,
+    key_stride,
+    value_ptr,
     value_stride,
-    k_cache_ptr,             # paged K cache [num_blocks, block_size, kvₗ, D]
-    v_cache_ptr,             # paged V cache
-    slot_mapping_ptr,        # [N] 每个 token 的目标物理槽位
-    D: tl.constexpr,         # kvₗ*D(编译期常量, 用于展开内层循环)
+    k_cache_ptr,
+    v_cache_ptr,
+    slot_mapping_ptr,
+    D: tl.constexpr,
 ):
-    """Triton kernel: 把新算的 K/V 散写到 paged KV cache。
-    PagedAttention 的写侧: 每个 token 按 slot_mapping 写到对应的物理槽。
-    一个 program 处理一个 token, 共 N 个 program 并行。
-    """
-    idx = tl.program_id(0)                          # 当前处理第 idx 个 token
-    slot = tl.load(slot_mapping_ptr + idx)          # 该 token 的物理槽 = block_id*block_size+offset
-    if slot == -1: return                           # -1 = prefix cache 命中, 无需写入, 直接跳过
-    # 源地址: 当前 token 的 K/V(连续 D 个元素)
+    """bf16/fp16: 原样散写 K/V 到 paged cache。"""
+    idx = tl.program_id(0)
+    slot = tl.load(slot_mapping_ptr + idx)
+    if slot == -1:
+        return
     key_offsets = idx * key_stride + tl.arange(0, D)
     value_offsets = idx * value_stride + tl.arange(0, D)
     key = tl.load(key_ptr + key_offsets)
     value = tl.load(value_ptr + value_offsets)
-    # 目标地址: paged cache 里 slot 对应的位置(可能不连续, 由 block_table 决定)
     cache_offsets = slot * D + tl.arange(0, D)
-    tl.store(k_cache_ptr + cache_offsets, key)      # 散写 K
-    tl.store(v_cache_ptr + cache_offsets, value)    # 散写 V
+    tl.store(k_cache_ptr + cache_offsets, key)
+    tl.store(v_cache_ptr + cache_offsets, value)
 
 
-def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
-    """启动 kernel 的包装函数。"""
+def store_kvcache_int8(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    k_scale: torch.Tensor,
+    v_scale: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    group_size: int = INT8_KV_GROUP_SIZE,
+):
+    """group-wise 动态对称量化写入 int8 cache。
+
+    key: [N, H, Dh]; k_scale: [num_blocks, block_size, H, G] fp16
+    """
+    valid = slot_mapping >= 0
+    if not valid.any():
+        return
+    idx = valid.nonzero(as_tuple=False).squeeze(-1)
+    slots = slot_mapping[idx]
+    k = key.index_select(0, idx)
+    v = value.index_select(0, idx)
+    M, H, Dh = k.shape
+    assert Dh % group_size == 0
+    G = Dh // group_size
+    k_g = k.view(M, H, G, group_size)
+    v_g = v.view(M, H, G, group_size)
+    k_amax = k_g.abs().amax(dim=-1).clamp_min(1e-8)
+    v_amax = v_g.abs().amax(dim=-1).clamp_min(1e-8)
+    k_q = (k_g / k_amax.unsqueeze(-1) * 127.0).round().clamp(-128, 127).to(torch.int8)
+    v_q = (v_g / v_amax.unsqueeze(-1) * 127.0).round().clamp(-128, 127).to(torch.int8)
+    k_s = (k_amax / 127.0).to(torch.float16)
+    v_s = (v_amax / 127.0).to(torch.float16)
+    block_size = k_cache.size(1)
+    blocks = torch.div(slots, block_size, rounding_mode="floor")
+    offs = slots - blocks * block_size
+    k_cache[blocks, offs] = k_q.view(M, H, Dh)
+    v_cache[blocks, offs] = v_q.view(M, H, Dh)
+    k_scale[blocks, offs] = k_s
+    v_scale[blocks, offs] = v_s
+
+
+def store_kvcache(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    k_scale: torch.Tensor | None = None,
+    v_scale: torch.Tensor | None = None,
+):
     N, num_heads, head_dim = key.shape
     D = num_heads * head_dim
-    # 一系列 stride 断言: 保证内存布局符合 kernel 的假设(最后一维连续)
     assert key.stride(-1) == 1 and value.stride(-1) == 1
     assert key.stride(1) == head_dim and value.stride(1) == head_dim
     assert k_cache.stride(1) == D and v_cache.stride(1) == D
     assert slot_mapping.numel() == N
-    # 启动 N 个 program, 每个 token 一个
-    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+    if k_cache.dtype == torch.int8:
+        assert k_scale is not None and v_scale is not None
+        store_kvcache_int8(key, value, k_cache, v_cache, k_scale, v_scale, slot_mapping)
+    else:
+        store_kvcache_kernel[(N,)](
+            key, key.stride(0), value, value.stride(0),
+            k_cache, v_cache, slot_mapping, D,
+        )
+
+
+def dequant_active_kv(
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    k_scale: torch.Tensor,
+    v_scale: torch.Tensor,
+    block_tables: torch.Tensor,
+    out_dtype: torch.dtype,
+    group_size: int = INT8_KV_GROUP_SIZE,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """反量化活跃物理块到 bf16/fp16 workspace, 并重映射 block_tables。"""
+    valid = block_tables >= 0
+    if not valid.any():
+        empty = k_cache[:0].to(out_dtype)
+        return empty, empty, block_tables
+
+    phys = torch.unique(block_tables[valid])
+    B = phys.numel()
+    _, block_size, H, Dh = k_cache.shape
+    G = Dh // group_size
+    k_i8 = k_cache[phys].view(B, block_size, H, G, group_size)
+    v_i8 = v_cache[phys].view(B, block_size, H, G, group_size)
+    k_ws = (k_i8.to(out_dtype) * k_scale[phys].to(out_dtype).unsqueeze(-1)).view(B, block_size, H, Dh)
+    v_ws = (v_i8.to(out_dtype) * v_scale[phys].to(out_dtype).unsqueeze(-1)).view(B, block_size, H, Dh)
+
+    num_blocks = k_cache.size(0)
+    mapper = torch.full((num_blocks,), -1, dtype=torch.int32, device=block_tables.device)
+    mapper[phys] = torch.arange(B, dtype=torch.int32, device=block_tables.device)
+    remapped = mapper[block_tables.clamp(min=0)]
+    new_bt = torch.where(valid, remapped, block_tables)
+    return k_ws, v_ws, new_bt
 
 
 class Attention(nn.Module):
-    """注意力算子: 封装 K/V 写入 paged cache + flash attn 调用。
-    prefill 用 flash_attn_varlen_func(变长, 多序列拼接),
-    decode 用 flash_attn_with_kvcache(查 paged cache)。
+    """注意力算子: 封装 K/V 写入 paged cache + flash attn。
+    3.1: use_int8_kv 时 group-wise 量化存储, 读前 gather-dequant。
     """
 
     def __init__(
         self,
-        num_heads,     # 本卡 Q 头数 hₗ
-        head_dim,      # D
-        scale,         # 1/√D
-        num_kv_heads,  # 本卡 KV 头数 kvₗ
+        num_heads,
+        head_dim,
+        scale,
+        num_kv_heads,
     ):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.scale = scale
         self.num_kv_heads = num_kv_heads
-        # 占位空张量; 真正的 paged cache 由 ModelRunner.allocate_kv_cache 注入
         self.k_cache = self.v_cache = torch.tensor([])
+        self.k_scale = self.v_scale = torch.tensor([])
+        self.use_int8_kv = False
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        context = get_context()                          # 拿 runner 准备好的张量
+        context = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
-        if k_cache.numel() and v_cache.numel():          # 若 paged cache 已分配
-            store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)   # 把新 K/V 散写入 cache
+        if k_cache.numel() and v_cache.numel():
+            if self.use_int8_kv:
+                store_kvcache(
+                    k, v, k_cache, v_cache, context.slot_mapping,
+                    self.k_scale, self.v_scale,
+                )
+            else:
+                store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+
         if context.is_prefill:
-            if context.block_tables is not None:         # 命中 prefix cache: 直接用 cache 里的 K/V
-                k, v = k_cache, v_cache
-            # 变长注意力: 多条不等长序列拼成一条, 用 cu_seqlens 分隔, 避免 padding
-            o = flash_attn_varlen_func(q, k, v,
-                                       max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
-                                       max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
-                                       softmax_scale=self.scale, causal=True, block_table=context.block_tables)
-        else:    # decode: 每序列 1 token, 查自己的 paged KV cache
-            o = flash_attn_with_kvcache(q.unsqueeze(1), k_cache, v_cache,
-                                        cache_seqlens=context.context_lens, block_table=context.block_tables,
-                                        softmax_scale=self.scale, causal=True)
+            block_tables = context.block_tables
+            if block_tables is not None:
+                if self.use_int8_kv:
+                    k, v, block_tables = dequant_active_kv(
+                        k_cache, v_cache, self.k_scale, self.v_scale,
+                        block_tables, q.dtype,
+                    )
+                else:
+                    k, v = k_cache, v_cache
+            o = flash_attn_varlen_func(
+                q, k, v,
+                max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
+                max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
+                softmax_scale=self.scale, causal=True, block_table=block_tables,
+            )
+        else:
+            if self.use_int8_kv:
+                k_use, v_use, block_tables = dequant_active_kv(
+                    k_cache, v_cache, self.k_scale, self.v_scale,
+                    context.block_tables, q.dtype,
+                )
+            else:
+                k_use, v_use = k_cache, v_cache
+                block_tables = context.block_tables
+            o = flash_attn_with_kvcache(
+                q.unsqueeze(1), k_use, v_use,
+                cache_seqlens=context.context_lens, block_table=block_tables,
+                softmax_scale=self.scale, causal=True,
+            )
         return o

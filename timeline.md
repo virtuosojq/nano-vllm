@@ -4,24 +4,24 @@
 > 分工：改进项的「做法/验收/参考 PR」看 `IMPROVEMENT_PLAN.md`；本文件只回答
 > **什么时候做什么、用什么配置跑、动手前准备什么、做到哪可以停**。
 >
-> **进度（2026-08-19）**：**M0 / M1 / M2 已落地**。下一阶段日历 = **2.7 → 3.1**（单卡即可）。
+> **进度（2026-08-21）**：**M0 / M1 / M2 / M2.5(2.7) / M2.6(3.1) 已落地**。下一阶段 = **层 C 可选**。
 > 硬件上限 2×4090（同机 48GB，PCIe 无 NVLink）。开工前 `nvidia-smi` 确认卡数——跨机两张卡不能 TP。
 > 层 C 若碰 30B：官方 FP8 ~31GB 需 **同机 TP2**；不要把 fused MoE 当里程碑。
 
 ## 总览
 
-**主线约 7–9 个工作日**（层 A + 层 B）**已走完**。层 C 另计，允许不做完。
+**主线约 7–9 个工作日**（层 A + 层 B）**已走完**；**2.7 / 3.1 加厚已完成**。层 C 另计，允许不做完。
 
 ```
 第0步   baseline_v0          ✅ 已完成（2026-08-19，单卡 Qwen3-0.6B）
 层 A    打地基               ✅ 已完成 1.1–1.4  → M1
 层 B    引擎主线             ✅ 已完成 2.4 / 2.6 / 2.2  → M2
-层 B+   M2 之后加厚          ⏳ 2.7 hybrid P+D → 3.1 INT8 KV（都做透）
+层 B+   M2 之后加厚          ✅ 2.7 hybrid（2026-08-21）→ ✅ 3.1 INT8 KV（2026-08-21）
 层 C    规模加分（可失败）     未开始：可选 8B 复测 → Llama-3.2-3B → FP8 loader → MoE
 停车场  明确不进日历           INT4/32B-AWQ、fused MoE 当里程碑、EAGLE-3、xgrammar、3.8、SM89 FP8 attn
 ```
 
-**最小可演示完成态 = 层 A + 2.4 消融表（已达成）。** 2.7/3.1 加厚「生产调度 + 带宽墙」，不要为 30B 把这两项做浅。
+**最小可演示完成态 = 层 A + 2.4 消融表（已达成）。** 2.7 完成 = 调度故事闭环；3.1 加厚「带宽墙」，不要为 30B 把这项做浅。
 
 关键依赖链（不可对调）：
 
@@ -30,12 +30,12 @@
 - **1.3 → 层 B**：单次运行 <5% 的差异不可信（✅；2.6 验证了噪声门闩）；
 - **1.3 mixed + 1.4 → 2.4**：没有混合负载和 preempt/prefix 用例，不要改调度（✅）；
 - **2.6 → 2.1**：**不修 2.1**（2.6 吞吐已在噪声边）；
-- **2.4 → 2.7 → 3.1**：轮转消融（✅）→ 同一步混 batch（⏳）→ INT8 KV（⏳）。禁止对调；
+- **2.4 → 2.7 → 3.1**：轮转消融（✅）→ 同一步混 batch（✅）→ INT8 KV（✅）。禁止对调；
 - **2.3 + 3.6 → 2.5**：层 C 内部依赖；禁止用 MoE 数字对 `baseline_v0` 报百分比。
 
 ---
 
-## 已完成清单（2026-08-19，单卡 Qwen3-0.6B）
+## 已完成清单（单卡 Qwen3-0.6B）
 
 | 项 | 结果文件 / 入口 | 面试一句话 |
 |---|---|---|
@@ -46,14 +46,16 @@
 | 2.4 调度 | `results/opt_2.4_schedule.json`、`DEMO_2.4.md` | LD ITL p99 **5.07→3.50**；budget 扫 TTFT↔吞吐 |
 | 2.6 打包 | `results/opt_2.6_decode_pack.json` | 常驻 pinned；**吞吐在噪声边**，不报加速比 |
 | 2.2 n-gram | `results/opt_2.2_ngram.json` | 重复文本 accept **~0.89**；HF 对齐 **≤40**；64 会分叉 |
+| **2.7 hybrid** | `results/opt_2.7_hybrid.json`、`tests/test_hybrid_schedule.py` | vs budget_512：thr **+7.7%**、TTFT **362→320**；同一步混 batch |
+| **3.1 INT8 KV** | `results/opt_3.1_int8_kv.json`、`ablate_int8_kv.py` | blocks **×1.78**；HF align **3/4**；禁 SM89 FP8 attn |
 
-未做（明确跳过）：**2.1 overlap**。未做（下一阶段）：**2.7、3.1**。层 C 全未开始。
+未做（明确跳过）：**2.1 overlap**。层 C 全未开始。
 
 ---
 
 ## 逐日安排
 
-### 已完成（D0–D8）
+### 已完成（D0–D10）
 
 | 工作日 | 层 | 内容 | 卡 | 落盘 |
 |---|---|---|---|---|
@@ -64,18 +66,18 @@
 | **D4–D5 ✅** | B | **2.4** `prefill_priority` / `decode_priority` / token-budget | 单卡 | `opt_2.4_schedule.json`；`DEMO_2.4.md` |
 | **D6–D7 ✅** | B | **2.6** 宿主侧 decode 打包 | 单卡 | 无 nsys；thr 噪声边；`opt_2.6_decode_pack.json` |
 | **D8 ✅** | B | **2.2** n-gram / prompt-lookup | 单卡 | accept ~0.89；HF≤40；`opt_2.2_ngram.json` |
+| **D9–D10 ✅** | B+ | **2.7** hybrid 同一步 P+D | 单卡 | `opt_2.7_hybrid.json`；HF hybrid 100% |
+| **D11–D13 ✅** | B+ | **3.1** INT8 KV | 单卡 | `opt_3.1_int8_kv.json`；blocks ×1.78；align 3/4 |
 
-### 待做（D9+）
+### 待做（D14+）
 
 | 工作日 | 层 | 内容 | 卡 | 动手前准备 |
 |---|---|---|---|---|
-| D9–D10 | B+ | **2.7** hybrid：同一步 decode + prefill chunk；`ablate_schedule.py` 加 hybrid 列 | 单卡 | 2.4 回归仍过；hybrid 步关 ngram |
-| D11–D13 | B+ | **3.1** INT8 KV：store 量化 + FA 前反量化；blocks 约 ×2；align 允许记分叉 | 单卡 | **必须 2.7 已合**。禁止 FlashInfer FP8 attn |
-| D14+ | C | 可选 Qwen3-8B 复测 2.7/3.1（`baseline_qwen3_8b`）；或 2.3 Llama-3.2-3B | 单卡；30B 才 TP2 | 见权重清单 |
+| D14+ | C | 可选 Qwen3-8B 复测 3.1（`baseline_qwen3_8b`）；或 2.3 Llama-3.2-3B | 单卡；30B 才 TP2 | 见权重清单 |
 
 P0 尾声 **不必** 为了 3.8 去跑 `baseline_v0_tp2`。真上 TP（层 C 的 30B 或修 #248/#215）当天再采一份同配置基线。
 
-**2.7 与 3.1**：都做透，先 2.7 后 3.1。不要并行浅做。2.1 overlap 不再排期。
+**3.1**：做透。2.1 overlap 不再排期。
 
 ---
 
@@ -154,6 +156,6 @@ python baseline.py --compare results/baseline_llama3b.json results/opt_xxx.json
 - **M0**（✅ 已完成）：`baseline_v0.json` 落盘 —— 同配置对比的锚点。
 - **M1**（✅ D3，层 A）：HF 贪心对齐 + 三次中位数/`mixed` + 3～4 个边界回归。叙事：「我能量化、敢改」。
 - **M2**（✅ D8，层 B，**面试最小完成态**）：2.4 TTFT–ITL 曲线 + 2.6（机制/噪声）+ 2.2（accept + ≤40 对齐）。叙事：「我懂服务侧引擎」。
-- **M2.5**（⏳ D9–D10，**2.7**）：轮转 vs **同一步 hybrid** 对照表。叙事：「这才是 vLLM v1 / Sarathi 的 stall-free」。
-- **M2.6**（⏳ D11–D13，**3.1**）：INT8 KV 显存 ×2 + 对齐率。叙事：「decode 带宽墙，4090 上不跟风 SM90 FP8 attn」。
+- **M2.5**（✅ D9–D10，**2.7**）：轮转 vs **同一步 hybrid** 对照表。叙事：「这才是 vLLM v1 / Sarathi 的 stall-free」。
+- **M2.6**（✅ D11–D13，**3.1**）：INT8 KV 显存 ×1.78 + 对齐率 3/4。叙事：「decode 带宽墙，4090 上不跟风 SM90 FP8 attn」。
 - **M3**（D14+，层 C，可缺席）：8B 复测和/或 Llama-3.2-3B / FP8 / MoE load。fused kernel 未完成不影响 M2。

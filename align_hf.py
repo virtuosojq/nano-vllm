@@ -60,8 +60,19 @@ def hf_greedy(model_path: str, prompts: list[str], max_tokens: int) -> list[list
     return outs
 
 
-def nano_greedy(model_path: str, prompts: list[str], max_tokens: int, enforce_eager: bool) -> list[list[int]]:
-    llm = LLM(model_path, enforce_eager=enforce_eager, max_model_len=4096)
+def nano_greedy(
+    model_path: str,
+    prompts: list[str],
+    max_tokens: int,
+    enforce_eager: bool,
+    kv_cache_dtype: str = "auto",
+) -> list[list[int]]:
+    llm = LLM(
+        model_path,
+        enforce_eager=enforce_eager,
+        max_model_len=4096,
+        kv_cache_dtype=kv_cache_dtype,
+    )
     token_ids = [llm.tokenizer.encode(p) for p in prompts]
     sp = SamplingParams(temperature=0.0, max_tokens=max_tokens, ignore_eos=True)
     outputs = llm.generate(token_ids, sp, use_tqdm=False)
@@ -77,31 +88,48 @@ def main() -> int:
     parser.add_argument("--prompts", nargs="*", default=ALIGN_PROMPTS)
     parser.add_argument("--cuda-graph", action="store_true",
                         help="nano 侧开启 CUDA Graph（默认 eager，与 HF flash-attn 对齐）")
+    parser.add_argument("--kv-cache-dtype", default="auto", choices=["auto", "int8"],
+                        help="3.1: int8 KV 量化路径")
     args = parser.parse_args()
 
     print(f"model={args.model}")
-    print(f"prompts={len(args.prompts)}  max_tokens={args.max_tokens}  nano_eager={not args.cuda_graph}")
+    print(
+        f"prompts={len(args.prompts)}  max_tokens={args.max_tokens}  "
+        f"nano_eager={not args.cuda_graph}  kv_cache_dtype={args.kv_cache_dtype}"
+    )
     print("running HF greedy (flash_attention_2) ...")
     hf_ids = hf_greedy(args.model, args.prompts, args.max_tokens)
     print("running nano-vllm greedy (T=0) ...")
-    nano_ids = nano_greedy(args.model, args.prompts, args.max_tokens, enforce_eager=not args.cuda_graph)
+    nano_ids = nano_greedy(
+        args.model, args.prompts, args.max_tokens,
+        enforce_eager=not args.cuda_graph,
+        kv_cache_dtype=args.kv_cache_dtype,
+    )
 
     ok = True
+    n_exact = 0
     for i, (p, h, n) in enumerate(zip(args.prompts, hf_ids, nano_ids)):
         match = h == n
         ok = ok and match
+        n_exact += int(match)
         status = "PASS" if match else "FAIL"
         print(f"\n[{status}] prompt[{i}]: {p!r}")
         if not match:
-            # 找首个分歧位置
             diverge = next((j for j, (a, b) in enumerate(zip(h, n)) if a != b), min(len(h), len(n)))
             print(f"  len hf={len(h)} nano={len(n)}  first_diff@{diverge}")
             print(f"  hf  [{diverge}:{diverge+8}]: {h[diverge:diverge+8]}")
             print(f"  nano[{diverge}:{diverge+8}]: {n[diverge:diverge+8]}")
         else:
-            print(f"  exact-match 64 tokens, head={h[:8]}")
+            print(f"  exact-match {len(h)} tokens, head={h[:8]}")
 
-    print("\n" + ("ALL PASS: HF exact-match 100%" if ok else "FAILED: not exact-match"))
+    rate = n_exact / max(len(args.prompts), 1)
+    print(f"\nexact-match rate: {n_exact}/{len(args.prompts)} ({rate:.0%})")
+    if args.kv_cache_dtype == "int8":
+        # 允许非 bit-exact; 目标至少 3/4
+        passed = n_exact >= 3
+        print("INT8 KV ACCEPT" if passed else "INT8 KV FAIL (need >=3/4 exact)")
+        return 0 if passed else 1
+    print("ALL PASS: HF exact-match 100%" if ok else "FAILED: not exact-match")
     return 0 if ok else 1
 
 

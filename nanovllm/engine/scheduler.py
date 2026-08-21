@@ -9,11 +9,13 @@ from nanovllm.engine.metrics import EngineMetrics
 class Scheduler:
     """Continuous batching 调度器.
 
-    策略 (2.4):
-      prefill_priority  现状: waiting 可调度则本步只做 prefill (decode 可能被饿死)
+    策略 (2.4 / 2.7):
+      prefill_priority  waiting 可调度则本步只做 prefill (decode 可能被饿死)
       decode_priority   running 非空则优先 decode
-      token_budget      prefill 每步最多 prefill_token_budget 个 token; 与 decode 轮转,
-                        近似 Sarathi 式「限预算 prefill + 不饿死 decode」(单步仍纯 P 或纯 D)
+      token_budget      prefill 每步最多 prefill_token_budget; 与 decode 轮转
+                        (单步仍纯 P 或纯 D)
+      hybrid            同一步先 decode, 再用剩余 seq 槽 + prefill_token_budget
+                        塞 chunked prefill (Sarathi stall-free / 2.7)
     """
 
     def __init__(self, config: Config):
@@ -44,14 +46,21 @@ class Scheduler:
         bm = self.block_manager
         self.metrics.sample_kv(len(bm.free_block_ids), len(bm.blocks))
 
-    def _try_schedule_prefill(self, token_budget: int | None = None) -> list[Sequence] | None:
+    def _try_schedule_prefill(
+        self,
+        token_budget: int | None = None,
+        max_seqs: int | None = None,
+    ) -> list[Sequence] | None:
         scheduled_seqs: list[Sequence] = []
         num_batched_tokens = 0
         limit = self.max_num_batched_tokens if token_budget is None else min(
             token_budget, self.max_num_batched_tokens
         )
+        seq_cap = self.max_num_seqs if max_seqs is None else min(max_seqs, self.max_num_seqs)
+        if seq_cap <= 0:
+            return None
 
-        while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
+        while self.waiting and len(scheduled_seqs) < seq_cap:
             seq = self.waiting[0]
             remaining = limit - num_batched_tokens
             if remaining == 0:
@@ -72,6 +81,7 @@ class Scheduler:
             if seq.num_scheduled_tokens <= 0:
                 # 理论上 #218 后不会出现; 防御
                 break
+            seq.is_prefill = True
             num_batched_tokens += seq.num_scheduled_tokens
             if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
                 seq.status = SequenceStatus.RUNNING
@@ -124,6 +134,21 @@ class Scheduler:
             self._sample_kv()
             return pref, True
 
+        if policy == "hybrid":
+            # 2.7: 同一步 decode + 限预算 prefill chunk; 混合批对 runner 报 is_prefill=True
+            dec = self._try_schedule_decode() or []
+            remaining_slots = self.max_num_seqs - len(dec)
+            pref = self._try_schedule_prefill(
+                self.prefill_token_budget, max_seqs=remaining_slots,
+            ) or []
+            assert dec or pref
+            self._sample_kv()
+            if dec and pref:
+                return dec + pref, True
+            if pref:
+                return pref, True
+            return dec, False
+
         # token_budget: 限预算 prefill 与 decode 轮转, 避免长 prefill 饿死 decode
         assert policy == "token_budget"
         budget = self.prefill_token_budget
@@ -160,12 +185,14 @@ class Scheduler:
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
-    def postprocess(self, seqs: list[Sequence], token_ids: list[int], is_prefill: bool):
+    def postprocess(self, seqs: list[Sequence], token_ids: list[int], is_prefill: bool = True):
+        # is_prefill 保留兼容; 是否 append 按 per-seq 完整性判断 (2.7 hybrid 必需)
         for seq, token_id in zip(seqs, token_ids):
             self.block_manager.hash_blocks(seq)
             seq.num_cached_tokens += seq.num_scheduled_tokens
             seq.num_scheduled_tokens = 0
-            if is_prefill and seq.num_cached_tokens < seq.num_tokens:
+            # 未完成的 prefill chunk: 只推进 cache, 不采样追加
+            if seq.num_cached_tokens < seq.num_tokens:
                 continue
             seq.append_token(token_id)
             if (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens == seq.max_tokens:

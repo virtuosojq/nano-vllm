@@ -419,3 +419,192 @@ Graph 优化了 launch，**没优化第 2–4 步**。
 ## 30 秒稿
 
 「投机解码我先做不需草稿模型的 n-gram：历史匹配提案，一次前向验证，讲清接受前缀和拒绝位重采样。重复文本接受率近 90%；并说明 paged KV 多 token verify 与逐步 AR 长生成可能分叉，对齐验收卡在 40 token。」
+
+---
+
+# 2.7 笔记：Hybrid P+D + 相关概念
+
+> 证据：`results/opt_2.7_hybrid.json` · 复现：`python ablate_schedule.py --save opt_2.7_hybrid`
+> 单测：`tests/test_hybrid_schedule.py` · 对齐：默认 `align_hf.py` + hybrid 并发 4×64
+
+## 一句话
+
+> Continuous batching **已经有了**；2.7 不是「从零做 CB」，而是把 2.4 的「逐步纯 P 或纯 D 轮转」
+> 升级成 **同一步 decode + chunked prefill**（Sarathi stall-free / 接近 vLLM v1）。
+
+## 概念辨析
+
+### Continuous batching vs Hybrid P+D
+
+| 概念 | 本仓库状态 | 含义 |
+|------|------------|------|
+| Continuous batching | ✅ 原有 | 多请求按 step 动态拼批，生命周期独立（waiting/running） |
+| 2.4 调度策略 | ✅ | 每步仍纯 P 或纯 D，只改「谁先跑」 |
+| 2.7 hybrid | ✅ 新增 | **同一步**里既有 decode 又有 prefill chunk |
+
+### Prefill / Decode 因果 vs「decode 优先」
+
+- **单条请求**：必须先 prefill（或 chunk 推进完）才能 decode——因果顺序不变。
+- **`decode_priority` 实质**：管的是 **跨请求** 这一步 GPU 先伺候谁。
+  - running 里已有人在 decode → 先跑他们的 decode；
+  - waiting 里新来的长 prefill 先让路。
+  - **不是**「跳过 prefill 直接 decode」。
+
+### `token_budget_512` 含义
+
+- 策略 = `token_budget`，`prefill_token_budget=512`。
+- 每步若跑 prefill，最多 512 个 prompt token；与 decode **轮转**（一步仍纯 P 或纯 D）。
+- 消融名 `token_budget_512` 只是扫预算时的标签。
+
+### Hybrid vs token_budget（同预算对照）
+
+| | token_budget_512 | hybrid_512 |
+|--|------------------|------------|
+| 预算 | 每步 prefill ≤512 | 同样 ≤512 |
+| 一步形态 | 纯 P **或** 纯 D（轮转） | **同一步** decode + prefill chunk |
+| 对照意义 | 控制变量只有「是否同一步混 batch」 | 2.7 的正确基线 |
+
+### varlen 是什么
+
+- **variable length（变长）**：一批内各序列 query 长度可以不同。
+- 用 `cu_seqlens_q/k` 前缀和切开拍平 token；hybrid/prefill 走 `flash_attn_varlen_func`。
+- 纯 decode 的 `flash_attn_with_kvcache` + CUDA Graph 假设「每行约 1 token」——混合批不能走这条。
+
+## 背表（本机三次中位数，mixed 16+16）
+
+| 策略 | thr | LP TTFT p50 | LD ITL p99 |
+|------|-----|-------------|------------|
+| prefill_priority | 4354 | 148 | 5.2 |
+| decode_priority | 4040 | 148 | **3.5** |
+| token_budget_512 | 2882 | 362 | 4.7 |
+| **hybrid_512** | **3104** | **320** | **4.8** |
+
+读表要点：
+
+- **正确对照** = `token_budget_512`：hybrid 吞吐约 +7.7%、TTFT 更好、ITL 持平（增益 > 极差，可信）。
+- **不是全面碾压**：decode_priority 仍是 ITL 最优；prefill_priority 仍是峰值吞吐最高。
+- 面试主证据 =「同一步混 batch 机制 + 与轮转对照」；不要对 `baseline_v0` 报调度加速比。
+
+## 30 秒稿
+
+「2.4 证明谁先跑改变 ITL 长尾；token_budget 是限预算轮转，一步仍纯 P 或纯 D。
+2.7 同一步先 decode 再塞 prefill chunk，走 varlen+block_table。相对同预算轮转吞吐和 TTFT 更好、ITL 不恶化——这才是 stall-free；不是跳过单条的 prefill。」
+
+---
+
+# 2.7 各文件改动的意义
+
+| 文件 | 改了什么 | 意义（为什么必须动） |
+|------|----------|----------------------|
+| `nanovllm/config.py` | `schedule_policy` 允许 `"hybrid"`；budget 注释扩到 hybrid | 对外旋钮：不改配置层就无法选策略、也无法做消融扫点 |
+| `nanovllm/engine/scheduler.py` | `_try_schedule_prefill(max_seqs=)`；`hybrid` 分支先 decode 再填 prefill；`postprocess` 按 per-seq `cached < num_tokens` 决定是否 append | **调度语义核心**：同一步拼出混合 seq 列表；未完成 chunk 不能误 append，否则污染生成 |
+| `nanovllm/engine/model_runner.py` | 新增 `prepare_hybrid`；`run` 识别混合批 → varlen eager，禁 graph | **执行路径核心**：混合长度只能走 varlen+block_table；走 decode graph 会形状错误 |
+| `nanovllm/engine/llm_engine.py` | hybrid/`is_prefill=True` 不进 ngram；postprocess 前按 P/D 计 `num_tokens` | ngram verify 与混合批假设冲突；进度条/吞吐符号依赖计数约定 |
+| `ablate_schedule.py` | 增加 `hybrid_512` 点；统一 `enable_ngram=False`；默认 save `opt_2.7_hybrid` | 量化验收：同 mixed 负载出对照表，关 ngram 避免混淆归因 |
+| `tests/test_hybrid_schedule.py` | 断言同一步可含 P+D；纯 decode 时 `is_prefill=False` | 无 GPU 的调度契约回归，改调度时先挡回归 |
+| `results/opt_2.7_hybrid.json` | 三次中位数消融落盘 | 面试/台账证据本体 |
+| `IMPROVEMENT_PLAN.md` / `timeline.md` | 台账、M2.5 完成、下一跳 3.1 | 项目叙事与日历，不参与运行时 |
+
+**明确没改的**：`attention.py` 仍用全局 `is_prefill`——hybrid 步一律设 `True` 走 varlen 分支即可，不必第三套 attention API。
+
+---
+
+# 3.1 笔记：INT8 KV Cache（原理 + 做法）
+
+> 证据：`results/opt_3.1_int8_kv.json`（blocks/align）· `opt_3.1_baseline_{auto,int8}_eager.json`（吞吐）  
+> 复现：`python ablate_int8_kv.py` · `python align_hf.py --kv-cache-dtype int8`  
+> 吞吐对照：`baseline.py --suites throughput latency mixed --repeats 3 --enforce-eager --kv-cache-dtype {auto,int8} --gpu-memory-utilization 0.85`
+
+## 一句话
+
+> KV 用 **int8 + group-wise scale** 常驻 HBM；attention 前把本步用到的 block **反量化成 bf16** 再进现有 FlashAttention。主收益是同显存 **更多 KV blocks**（本机 ×1.78），不是追求 tok/s；第一版因 gather-dequant 税，eager 对照吞吐约 **−60%～−78%**（见下文「为何变慢」）。
+
+## 原理
+
+### 为什么动 KV
+
+Decode 每步要读整段历史 K/V。并发↑、上下文↑时，**KV 显存**先顶满。权重加载一次；KV 随 token 线性涨。bf16→int8 元素体积约减半，扣掉 scale 后块数仍可接近翻倍。
+
+### 对称量化（group-wise）
+
+对每个 token、每个 KV head，把 `head_dim` 按 **G=16** 分组。组内向量 \(x\)：
+
+1. \(s = \max(|x|) / 127\)
+2. \(q = \mathrm{round}(x/s)\) 夹到 \([-128,127]\) → `int8`
+3. 反量化：\(\hat{x} = q \cdot s\)
+
+比「整段 D 一个 scale」或「整 head 一个 scale」更细，argmax 更稳。本机：相对 auto **3/4** 条 64-token 贪心 exact-match；prompt0 在 token 5 分叉——**不是 bit-exact**，面试要主动说。
+
+### 与 FA 的合同
+
+现有 FA **不直接吃 int8 paged KV**，所以：
+
+| 阶段 | 行为 |
+|------|------|
+| 写 | 本步 bf16 K/V → 量化 → int8 cache + fp16 scale |
+| 读（decode / prefix / hybrid） | 收集 `block_tables` 里的物理块 → dequant 到 workspace → **重映射** block 下标 → FA |
+| 纯 prefill（无 block_table） | 仍用本步 bf16 K/V 算 attention，只额外量化写入 |
+
+### 为何 INT8 不是 FP8 attn
+
+4090 = Ada **SM89**；很多 FP8 attention / FlashInfer 路径面向 **SM90**。本方案：**INT8 只负责存**，算子仍是成熟 bf16 FA。
+
+### 为何关 CUDA Graph
+
+Graph 预捕获假设固定 bf16 paged buffer；int8 + 动态 workspace 重映射与之不兼容。第一版：`kv_cache_dtype=int8` → `use_cudagraph=False`。
+
+## 背表（本机 gpu_util=0.85）
+
+| 项 | auto | int8 |
+|----|------|------|
+| `num_kvcache_blocks` | 655 | **1166（×1.78）** |
+| HF greedy 4×64 | 100% | **3/4**（prompt0 @5 分叉） |
+| hybrid 冒烟 | — | 通过 |
+| 调度默认 | prefill_priority | 同左（3.1 不扫四种策略） |
+
+## 为何变慢（吞吐对照，eager 公平对比）
+
+> 证据：`results/opt_3.1_baseline_auto_eager.json` vs `opt_3.1_baseline_int8_eager.json`  
+> 条件：两边都 `--enforce-eager`（去掉 Graph 混杂）、`gpu_util=0.85`、三次中位数。
+
+| 套件 | 指标 | auto | int8 | 变化 |
+|------|------|------|------|------|
+| throughput | tok/s | 4436 | 993 | **−78%** |
+| throughput | TPOT p50 | 27 ms | 170 ms | +525% |
+| latency bs1/8/64 | tok/s | 71 / 518 / 3974 | 27 / 205 / 1598 | **约 −60%** |
+| mixed | tok/s | 1148 | 460 | **−60%** |
+
+**结论：3.1 第一版用容量换正确路径，没有带来 tok/s 提升；变慢是机制税，不是测噪。**
+
+### 根因（按贡献排序）
+
+1. **读侧 gather-dequant 同步税（主因）**  
+   FA 只吃 bf16。每步 decode/prefix/hybrid 都要：`unique(block_ids)` → 整块 int8→bf16 反量化 → 重映射 `block_tables` → 再调 FA。  
+   0.6B 上单步 FA 本身很快，这段 PyTorch 反量化/拷贝占比被放大，ITL/TPOT 明显变差。
+
+2. **写侧 group-wise 量化**  
+   每次 store 要算 amax、round、写 int8+scale（相对原 bf16 直写更重）。通常轻于读侧，但是固定附加成本。
+
+3. **CUDA Graph 关闭（产品路径上会再叠一层）**  
+   int8 与动态 workspace 不兼容 capture。上面对照已双方 eager，**表内 −60%～−78% 主要不是「少了 Graph」**，而是 dequant 路径本身。  
+   若拿默认 auto（开 Graph）去比 int8，差距还会更大——面试要分开说。
+
+4. **硬件/模型尺度**  
+   4090 + 0.6B 算力轻、带宽宽：省 KV 流量的收益盖不过额外 kernel/拷贝。计划里也写过「本机 tok/s 可能远小于 3090 报道的 +22%」。主 KPI 仍应是 **blocks ×1.78**，不是加速比。
+
+### 面试怎么说
+
+> 「INT8 KV 第一版验证的是存储合同和显存账：同利用率 blocks 约 1.8×，对齐 3/4。吞吐掉一截是因为 FA 前同步 gather-dequant，小模型上这笔税很显眼。下一步若要补吞吐故事，就该融 dequant / 减整块拷贝，而不是否认这个数字。」
+
+## 做法（代码锚点）
+
+1. `Config.kv_cache_dtype ∈ {auto, int8}`
+2. `allocate_kv_cache`：按 int8 元素 + group scale 算 `block_bytes` → 块数↑；注入 `k/v_cache`、`k/v_scale`
+3. `store_kvcache_int8`：向量化 per-group 量化写入
+4. `dequant_active_kv`：`torch.unique` 活跃块 → workspace → remap `block_tables`
+5. `ablate_int8_kv.py`：落盘 blocks 比与 align 率
+6. `baseline.py --kv-cache-dtype`：吞吐/延迟对照（见上表）
+
+## 30 秒稿
+
+「Decode 显存墙我做了 INT8 paged KV：group-wise 动态量化写入，读前反量化进 FA，4090 不上 FP8 attn。同利用率 blocks 约 1.8 倍，对齐 3/4。吞吐第一版会掉——主因是每步 gather-dequant 税，小模型上很明显；故事主轴是容量合同，吞吐优化是明确的下一步。」

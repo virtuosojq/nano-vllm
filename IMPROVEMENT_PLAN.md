@@ -24,7 +24,7 @@
 | 层 | 目标 | 完成态 | 失败是否可接受 |
 |---|---|---|---|
 | **A 地基**（~3d，必须） | 能量化、敢改 | HF 贪心 exact-match；三次中位数 + ITL P99 + `mixed`；引擎内 cache hit / KV util / per-request TTFT | 否 |
-| **B 引擎**（~4–6d，主线） | 懂服务侧引擎 | **2.4 调度消融已完成**；2.6/2.2 已做（数字有边界）。**下一阶段：2.7 hybrid P+D → 3.1 INT8 KV** | 2.7/3.1 必须做透；不要再开 2.1 |
+| **B 引擎**（~4–6d，主线） | 懂服务侧引擎 | **2.4/2.6/2.2/2.7 已完成**；**3.1 INT8 KV 已完成**。下一阶段：层 C 可选 | 层 C 可失败 |
 | **C 规模**（加分，可失败） | 碰到过规模问题 | 优先 **Qwen3-8B 单卡** 复测 2.7/3.1；Llama-3.2-3B / FP8 loader / MoE 仍可停 | 是。30B TP2 / fused kernel 不是叙事支柱 |
 
 **最小可演示完成态 = 层 A + 2.4 消融表（已达成）。** 2.7/3.1 是 M2 之后的加厚，做成 2.4 的「生产引擎那一跳」+「decode 带宽墙」。
@@ -106,9 +106,8 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 
 ## 2. 层 B — 服务侧引擎（主线）
 
-**已完成**：2.4 消融 → 2.6 打包（噪声边）→ 2.2 n-gram（≤40 对齐）。
-**M2 之后（都做透，顺序不可对调）**：**2.7 hybrid P+D → 3.1 INT8 KV**。
-不要再开 2.1 overlap。3.1 动 attention 读写，必须等 2.7 把混合 batch 路径钉死。
+**已完成**：2.4 消融 → 2.6 打包（噪声边）→ 2.2 n-gram（≤40 对齐）→ 2.7 hybrid P+D → **3.1 INT8 KV**。
+**下一阶段**：层 C 可选（8B 复测 / Llama / FP8 / MoE）。不要再开 2.1 overlap。
 
 ### 2.4 调度策略消融：prefill/decode 干扰（主线第一项）
 
@@ -297,8 +296,8 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
   → 1.3 三次中位数 + ITL P99 + mixed  ∥  1.2 三点埋点
   → 1.4 仅 #199/#240/#211/#114
 
-层 B（主线，已完成 2.4/2.6/2.2）
-  → 2.7 hybrid P+D 同一步（2.4 加深；单卡 0.6B mixed）
+层 B（主线，已完成 2.4/2.6/2.2/2.7）
+  → ✅ 2.7 hybrid P+D 同一步
   → 3.1 INT8 KV（写侧量化 + 读前反量化；禁 SM89 FP8 attn）
 
 层 C（加分，可停）
@@ -330,7 +329,7 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 | 2026-08-19 | 1.4 边界回归 #199/#240/#211/#114 | 未提交 | —（正确性） | **#211 实修**：`may_append`/`can_append` 增加 `len(block_table) < num_blocks`，避免抢占后 re-allocate 已备块时再追加导致写错槽。**#199/#114 N/A**：fork 已含 #218（最多命中 `num_blocks-1`），原 `seqlen_q==0` 崩溃不再触发。**#240 N/A**：`==1` 相对 schedule→forward→postprocess 时序正确，跨块 decode 通过。套件 `tests/test_1_4_edges.py` + `baseline --suites edge_cases`；见 `results/opt_1.4_edges.json` | 7/7 pass·n/a；指纹稳定 |
 | 2026-08-19 | 2.4 调度策略消融 | 未提交 | mixed 同负载三次中位数 | 新增 `schedule_policy`∈{prefill_priority, decode_priority, token_budget}+`prefill_token_budget`。引擎单步仍纯 P/D；token_budget=限预算 prefill↔decode 轮转。**消融表**（LP=长prefill组 TTFT p50，LD=长decode组）：prefill 4453 tok/s / TTFT145 / ITL_p99 **5.1**；decode 4123 / 145 / **3.5**（decode 不饿死）；budget 256→4096 扫出 TTFT 736→97.5 与 thr 1976→4397 的权衡。见 `results/opt_2.4_schedule.json`，脚本 `ablate_schedule.py` | 1.4 回归仍过 |
 | 2026-08-19 | 2.6 宿主侧 decode 打包 | 未提交 | opt_1.2_1.3_d2 latency | 新增 `DecodeInputBatch`（pinned+NumPy→单次 H2D 进 graph buffer）；CUDA Graph decode 不再每步 `torch.tensor(... pin_memory)`。**吞吐**：bs1/8/64 thr +1.6%/+0.4%/+0.8%，step_p50 −1.3%/−0.8%/−0.7%；bs1 step 极差 0.07 ≥ 收益，**吞吐不作主证据**。本机无 nsys；主证据=打包路径零 `torch.tensor` 单测 + 稳态 pinned `data_ptr` 不变。见 `results/opt_2.6_decode_pack.json`、`tests/test_decode_input_batch.py` | 指纹与 1.1 一致 |
-| 2026-08-19 | 2.2 n-gram / prompt-lookup | 未提交 | 同负载 greedy | `enable_ngram`+K；draft=历史 n-gram；verify=**逐条** prefill 多 token 前向+贪心接受；metrics 报 accept_rate。重复文本：accept **0.89**；warm tok/s ~198→227（+15%，首跑冷启动极差大）。`greedy_match_max40` 通过；align HF **≤40** exact-match（64 长生成可能分叉）。`ablate_ngram.py` / `results/opt_2.2_ngram.json` / `tests/test_ngram_speculation.py` | HF≤40；vs off@40 |
+| 2026-08-21 | 3.1 INT8 KV cache | 未提交 | 同 gpu_util=0.85 | `kv_cache_dtype=int8`：group-wise(G=16) 写侧量化 + 活跃 block gather-dequant 进 FA；禁 CUDA Graph。**blocks 655→1166（×1.78）**；`align_hf` **3/4** exact（prompt0 @5 分叉）。**吞吐（双方 eager）**：throughput **4436→993 tok/s（−78%）**；latency/mixed 约 **−60%**——主因读侧同步 dequant 税，非测噪。见 `opt_3.1_int8_kv.json`、`opt_3.1_baseline_{auto,int8}_eager.json`、`note.md` | 3/4 HF；1.4 过 |
 
 > 同配置模板：`总吞吐 +X% / TPOT P99 -Y ms / TTFT P50 -Z ms / 前缀命中 +H%`，附 `results/*.json`。
 > 换模型/TP：在「对比基线」列写独立文件名，不要填相对 `baseline_v0` 的百分比。
@@ -341,5 +340,6 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 
 > 我在约 1200 行的 nano-vllm 上复刻了 PagedAttention / continuous batching / chunked prefill / CUDA graph；
 > 先做成可复现、带重复测量、并与 HuggingFace 贪心对齐的基准。然后针对 continuous batching 下
-> **prefill 饿死 decode** 做了调度消融（`DEMO_2.4.md`）：同 mixed 负载下 decode_priority 把长 decode 的
-> ITL p99 **5.07→3.50**（吞吐约 −7%）；token_budget 扫出 TTFT–吞吐曲线。下一步把轮转升级为 **同一步 hybrid P+D（2.7）**，再做 **INT8 KV（3.1）** 讲 decode 带宽墙；宿主侧打包（2.6）本机收益在噪声边只讲机制。多模型 / MoE 是扩展层。
+> **prefill 饿死 decode** 做了调度消融（`DEMO_2.4.md`），再升级为 **同一步 hybrid P+D（2.7）**。
+> 最后做 **INT8 KV（3.1）**：写侧 group-wise 量化、读前反量化进 FA（4090 不上 SM90 FP8 attn），
+> 同显存 blocks **×1.78**，贪心对齐 3/4（主动说明非 bit-exact）。宿主侧打包（2.6）本机收益在噪声边只讲机制。

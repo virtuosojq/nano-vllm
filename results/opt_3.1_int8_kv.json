@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "timestamp": "2026-08-21 15:47:59",
+    "model": "/root/autodl-tmp/huggingface/Qwen3-0.6B/",
+    "gpu_memory_utilization": 0.85,
+    "kv_group_size": 16,
+    "note": "INT8 KV: group-wise quant store + gather-dequant; CUDA Graph disabled"
+  },
+  "blocks": {
+    "auto": 655,
+    "int8": 1166,
+    "ratio": 1.7801526717557252
+  },
+  "align_hf_int8": {
+    "exact_match_count": 3,
+    "exact_match_rate": 0.75,
+    "details": [
+      {
+        "prompt_idx": 0,
+        "exact": false,
+        "first_diff": 5
+      },
+      {
+        "prompt_idx": 1,
+        "exact": true
+      },
+      {
+        "prompt_idx": 2,
+        "exact": true
+      },
+      {
+        "prompt_idx": 3,
+        "exact": true
+      }
+    ],
+    "accept_ge_3_of_4": true
+  },
+  "pass": {
+    "blocks_ratio_gt_1_5": true,
+    "align_ge_3_of_4": true
+  }
+}

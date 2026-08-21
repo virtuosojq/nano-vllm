@@ -25,6 +25,8 @@ class ModelRunner:
         self.rank = rank
         self.event = event
         self.decode_input_batch: DecodeInputBatch | None = None
+        # 3.1: int8 KV 与动态 workspace 不兼容 CUDA Graph capture
+        self.use_cudagraph = (not config.enforce_eager) and (config.kv_cache_dtype != "int8")
 
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
@@ -36,7 +38,7 @@ class ModelRunner:
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
-        if not self.enforce_eager:
+        if self.use_cudagraph:
             self.capture_cudagraph()
             self._init_decode_input_batch()
         torch.set_default_device("cpu")
@@ -67,7 +69,7 @@ class ModelRunner:
             dist.barrier()
             if self.rank == 0:
                 self.shm.unlink()
-        if not self.enforce_eager:
+        if self.use_cudagraph:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
         dist.destroy_process_group()
@@ -123,15 +125,45 @@ class ModelRunner:
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
+        use_int8 = config.kv_cache_dtype == "int8"
+        # 每 block: 2(K/V) * L * block_size * H * D * elem
+        # int8 另加 per-head scale: 2 * L * block_size * H * 2(fp16)
+        elem_size = 1 if use_int8 else hf_config.dtype.itemsize
+        kv_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * elem_size
+        scale_bytes = (
+            # per group scale: 2(K/V) * L * block_size * H * (Dh/G) * 2(fp16); G=16
+            2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads
+            * (head_dim // 16) * 2
+            if use_int8 else 0
+        )
+        block_bytes = kv_bytes + scale_bytes
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+        cache_dtype = torch.int8 if use_int8 else hf_config.dtype
+        self.kv_cache = torch.empty(
+            2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size,
+            num_kv_heads, head_dim, dtype=cache_dtype,
+        )
+        self.kv_scale = None
+        if use_int8:
+            assert head_dim % 16 == 0, "int8 KV group_size=16 requires head_dim % 16 == 0"
+            num_groups = head_dim // 16
+            # [2, L, blocks, block_size, H, G]
+            self.kv_scale = torch.empty(
+                2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size,
+                num_kv_heads, num_groups, dtype=torch.float16,
+            )
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
+                if use_int8:
+                    module.k_scale = self.kv_scale[0, layer_id]
+                    module.v_scale = self.kv_scale[1, layer_id]
+                    module.use_int8_kv = True
+                else:
+                    module.use_int8_kv = False
                 layer_id += 1
 
     def prepare_block_tables(self, seqs: list[Sequence]):
@@ -175,6 +207,64 @@ class ModelRunner:
                 slot_mapping.extend(range(slot_start, slot_end))
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
             block_tables = self.prepare_block_tables(seqs)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
+        return input_ids, positions
+
+    def prepare_hybrid(self, seqs: list[Sequence]):
+        """2.7: 同一步混 decode(seqlen_q=1) + prefill chunk, 统一走 varlen + block_table.
+
+        decode 行: start=num_cached_tokens, 通常等于 len-1, 输入 last_token.
+        只要任一条有历史 KV 或含 decode, 就带 block_tables, 避免 FA 误用「仅本步 K/V」.
+        """
+        input_ids = []
+        positions = []
+        cu_seqlens_q = [0]
+        cu_seqlens_k = [0]
+        max_seqlen_q = 0
+        max_seqlen_k = 0
+        slot_mapping = []
+        need_block_tables = False
+        for seq in seqs:
+            start = seq.num_cached_tokens
+            seqlen_q = seq.num_scheduled_tokens
+            end = start + seqlen_q
+            seqlen_k = end
+            if not seq.is_prefill:
+                # decode: 不依赖 seq[start:end](TP pickle 可能只有 last_token)
+                assert seqlen_q == 1
+                input_ids.append(seq.last_token)
+                positions.append(len(seq) - 1)
+                need_block_tables = True
+            else:
+                input_ids.extend(seq[start:end])
+                positions.extend(range(start, end))
+                if start > 0:
+                    need_block_tables = True
+            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+            cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+            max_seqlen_q = max(seqlen_q, max_seqlen_q)
+            max_seqlen_k = max(seqlen_k, max_seqlen_k)
+            if not seq.block_table:  # warmup
+                continue
+            start_block = start // self.block_size
+            end_block = (end + self.block_size - 1) // self.block_size
+            for i in range(start_block, end_block):
+                slot_start = seq.block_table[i] * self.block_size
+                if i == start_block:
+                    slot_start += start % self.block_size
+                if i != end_block - 1:
+                    slot_end = seq.block_table[i] * self.block_size + self.block_size
+                else:
+                    slot_end = seq.block_table[i] * self.block_size + end - i * self.block_size
+                slot_mapping.extend(range(slot_start, slot_end))
+        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:
+            need_block_tables = True
+        block_tables = self.prepare_block_tables(seqs) if need_block_tables else None
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -286,7 +376,7 @@ class ModelRunner:
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
-        if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
+        if is_prefill or (not self.use_cudagraph) or input_ids.size(0) > 512:
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
             bs = input_ids.size(0)
@@ -368,9 +458,11 @@ class ModelRunner:
 
     @torch.inference_mode()
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
+        is_hybrid = any(s.is_prefill for s in seqs) and any(not s.is_prefill for s in seqs)
         use_graph_decode = (
             (not is_prefill)
-            and (not self.enforce_eager)
+            and (not is_hybrid)
+            and self.use_cudagraph
             and self.decode_input_batch is not None
             and len(seqs) <= 512
         )
@@ -381,6 +473,10 @@ class ModelRunner:
                 if self.rank == 0 else None
             )
             logits = self.run_model_graph(view.batch_size)
+        elif is_hybrid:
+            input_ids, positions = self.prepare_hybrid(seqs)
+            temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+            logits = self.run_model(input_ids, positions, is_prefill=True)
         else:
             input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
             temperatures = self.prepare_sample(seqs) if self.rank == 0 else None

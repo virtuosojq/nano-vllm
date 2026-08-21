@@ -395,6 +395,9 @@ def collect_meta(model_path: str, engine: LLM, repeats: int) -> dict:
             "enforce_eager": getattr(cfg, "enforce_eager", None),
             "schedule_policy": getattr(cfg, "schedule_policy", None),
             "prefill_token_budget": getattr(cfg, "prefill_token_budget", None),
+            "kv_cache_dtype": getattr(cfg, "kv_cache_dtype", None),
+            "num_kvcache_blocks": getattr(cfg, "num_kvcache_blocks", None),
+            "gpu_memory_utilization": getattr(cfg, "gpu_memory_utilization", None),
         },
     }
 
@@ -477,6 +480,9 @@ def main():
                         help="每套件重复次数, 取中位数并记极差 (1.3)")
     parser.add_argument("--save", default=None, help="保存名, 存至 results/<名>.json")
     parser.add_argument("--enforce-eager", action="store_true", help="禁用 CUDA Graph")
+    parser.add_argument("--kv-cache-dtype", default="auto", choices=["auto", "int8"],
+                        help="3.1: KV 存储 dtype")
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     parser.add_argument("--compare", nargs=2, metavar=("OLD.json", "NEW.json"),
                         help="对比两份结果后退出 (只比中位数视图)")
     args = parser.parse_args()
@@ -488,8 +494,18 @@ def main():
     if args.repeats < 1:
         parser.error("--repeats must be >= 1")
 
-    engine = LLM(args.model, enforce_eager=args.enforce_eager, max_model_len=4096)
-    print("warming up ...")
+    engine = LLM(
+        args.model,
+        enforce_eager=args.enforce_eager,
+        max_model_len=4096,
+        kv_cache_dtype=args.kv_cache_dtype,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+    )
+    print(
+        f"warming up ... (kv_cache_dtype={args.kv_cache_dtype}, "
+        f"blocks={engine.model_runner.config.num_kvcache_blocks}, "
+        f"eager={args.enforce_eager})"
+    )
     warmup(engine)
 
     report = {"meta": collect_meta(args.model, engine, args.repeats), "suites": {}}
