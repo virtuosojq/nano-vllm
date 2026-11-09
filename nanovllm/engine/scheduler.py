@@ -1,9 +1,14 @@
-from collections import deque
+from __future__ import annotations
 
-from nanovllm.config import Config
+from collections import deque
+from typing import TYPE_CHECKING
+
 from nanovllm.engine.sequence import Sequence, SequenceStatus
 from nanovllm.engine.block_manager import BlockManager
 from nanovllm.engine.metrics import EngineMetrics
+
+if TYPE_CHECKING:
+    from nanovllm.config import Config
 
 
 class Scheduler:
@@ -18,7 +23,7 @@ class Scheduler:
                         塞 chunked prefill (Sarathi stall-free / 2.7)
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: "Config"):
         self.max_num_seqs = config.max_num_seqs
         self.max_num_batched_tokens = config.max_num_batched_tokens
         self.eos = config.eos
@@ -41,6 +46,22 @@ class Scheduler:
 
     def add(self, seq: Sequence):
         self.waiting.append(seq)
+
+    def abort(self, seq_id: int) -> bool:
+        """Drop a waiting/running sequence and free its KV blocks.
+
+        Safe to call between steps. Used by the OpenAI server for stop strings
+        and client disconnects.
+        """
+        for queue in (self.waiting, self.running):
+            for seq in list(queue):
+                if seq.seq_id != seq_id:
+                    continue
+                seq.status = SequenceStatus.FINISHED
+                self.block_manager.deallocate(seq)
+                queue.remove(seq)
+                return True
+        return False
 
     def _sample_kv(self):
         bm = self.block_manager

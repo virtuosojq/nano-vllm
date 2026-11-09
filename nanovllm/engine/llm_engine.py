@@ -28,6 +28,7 @@ class LLMEngine:
             process.start()
             self.ps.append(process)
             self.events.append(event)
+        self.config = config
         self.model_runner = ModelRunner(config, 0, self.events)
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
@@ -52,12 +53,25 @@ class LLMEngine:
     def get_metrics(self) -> dict:
         return self.scheduler.metrics.summary()
 
-    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
+    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams) -> int:
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
         seq = Sequence(prompt, sampling_params)
         seq.arrival_time = perf_counter()
         self.scheduler.add(seq)
+        return seq.seq_id
+
+    def abort(self, seq_id: int) -> bool:
+        return self.scheduler.abort(seq_id)
+
+    def get_seq(self, seq_id: int) -> Sequence | None:
+        for seq in self.scheduler.waiting:
+            if seq.seq_id == seq_id:
+                return seq
+        for seq in self.scheduler.running:
+            if seq.seq_id == seq_id:
+                return seq
+        return None
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()

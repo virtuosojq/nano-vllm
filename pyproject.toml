@@ -19,6 +19,13 @@ dependencies = [
     "xxhash",
 ]
 
+[project.optional-dependencies]
+serve = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "httpx>=0.27",
+]
+
 [project.urls]
 Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 
