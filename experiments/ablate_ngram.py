@@ -1,8 +1,8 @@
 """2.2 n-gram 投机: 正确性 (vs 关闭) + 重复文本吞吐消融.
 
 用法:
-  python ablate_ngram.py
-  python ablate_ngram.py --max-tokens 128 --repeats 3
+  python experiments/ablate_ngram.py
+  python experiments/ablate_ngram.py --max-tokens 128 --repeats 3
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
+
+from _root import result_path
 
 DEFAULT_MODEL = "/root/autodl-tmp/huggingface/Qwen3-0.6B/"
 
@@ -157,7 +158,7 @@ def main() -> int:
     for key in ("base40", "ngram40"):
         results[key].pop("token_ids_last", None)
 
-    out_path = Path(args.out)
+    out_path = result_path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(results, indent=2))
     print(json.dumps({

@@ -6,8 +6,8 @@
   - hybrid (2.7): 同一步 P+D vs token_budget 轮转
 
 用法:
-  python ablate_schedule.py
-  python ablate_schedule.py --repeats 3 --budgets 256 512 1024 2048 --save opt_2.7_hybrid
+  python experiments/ablate_schedule.py
+  python experiments/ablate_schedule.py --repeats 3 --budgets 256 512 1024 2048 --save opt_2.7_hybrid
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import sys
 import time
 from random import randint, seed
 
+from _root import result_path
 from nanovllm import LLM, SamplingParams
 
 DEFAULT_MODEL = "/root/autodl-tmp/huggingface/Qwen3-0.6B/"
@@ -241,10 +242,9 @@ def main() -> int:
             f"{m['long_decode']['itl_ms']['p99']:12.1f}"
         )
 
-    os.makedirs("results", exist_ok=True)
-    path = os.path.join("results", args.save if args.save.endswith(".json") else f"{args.save}.json")
-    with open(path, "w") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+    path = result_path(args.save)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nsaved -> {path}")
     return 0
 

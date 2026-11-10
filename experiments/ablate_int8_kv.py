@@ -1,8 +1,8 @@
 """3.1 INT8 KV: 对比 auto vs int8 的 num_kvcache_blocks, 并记录 align 匹配率.
 
 用法:
-  python ablate_int8_kv.py
-  python ablate_int8_kv.py --save opt_3.1_int8_kv
+  python experiments/ablate_int8_kv.py
+  python experiments/ablate_int8_kv.py --save opt_3.1_int8_kv
 """
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ import time
 
 import torch
 
-from nanovllm import LLM, SamplingParams
+from _root import result_path
 from align_hf import ALIGN_PROMPTS, hf_greedy
+from nanovllm import LLM, SamplingParams
 
 DEFAULT_MODEL = "/root/autodl-tmp/huggingface/Qwen3-0.6B/"
 
@@ -105,10 +106,9 @@ def main() -> int:
         },
     }
 
-    os.makedirs("results", exist_ok=True)
-    path = os.path.join("results", args.save if args.save.endswith(".json") else f"{args.save}.json")
-    with open(path, "w") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+    path = result_path(args.save)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"saved -> {path}")
     ok = report["pass"]["blocks_ratio_gt_1_5"] and report["pass"]["align_ge_3_of_4"]
     return 0 if ok else 1

@@ -1,6 +1,6 @@
 # 2.4 面试演示卡（钉死版）
 
-> 证据：`results/opt_2.4_schedule.json` · 复现：`python ablate_schedule.py`  
+> 证据：`results/opt_2.4_schedule.json` · 复现：`python experiments/ablate_schedule.py`  
 > 负载：mixed `16×(1024→32)` + `16×(64→256)` · 三次中位数 · Qwen3-0.6B 单卡
 
 ---
@@ -48,7 +48,7 @@ Continuous batching 里若 **waiting 有 prefill 就绝不跑 decode**，长 pro
 
 ```bash
 # 重跑消融（约数分钟）
-python ablate_schedule.py --repeats 3
+python experiments/ablate_schedule.py --repeats 3
 
 # 或只打印已落盘表
 python - <<'PY'

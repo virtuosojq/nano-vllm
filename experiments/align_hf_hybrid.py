@@ -7,7 +7,7 @@ import sys
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _root  # noqa: F401  # repo root on sys.path
 from nanovllm import LLM, SamplingParams
 
 MODEL = os.environ.get("NANOVLLM_MODEL", "/root/autodl-tmp/huggingface/Qwen3-0.6B/")

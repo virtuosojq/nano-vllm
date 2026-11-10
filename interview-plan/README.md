@@ -48,7 +48,7 @@
 - [x] 写好 nano-vllm 的 OpenAI 兼容服务（`/v1/completions`，流式和非流式，`stop`、`ignore_eos`、`usage`）
 - [x] 本地用 `curl` 和一个假模型/小模型验证服务协议正确（不需要 GPU 的部分先在本地做完）
 - [x] 写好场景矩阵脚本，一条命令跑完 nano-vllm 和 vLLM 两侧
-- [ ] AutoDL 第 1 次开机：用旧 `baseline.py` 复现旧的离线吞吐（约 6153 tok/s，Qwen3-0.6B），确认环境一致
+- [ ] AutoDL 第 1 次开机：用旧 `experiments/baseline.py` 复现旧的离线吞吐（约 6153 tok/s，Qwen3-0.6B），确认环境一致
 - [ ] AutoDL 第 1 次开机：跑 vLLM 和 nano-vllm 基线（未优化版本）的完整场景矩阵
 - [ ] AutoDL 第 2 次开机：跑 nano-vllm 各项优化的场景矩阵，INT8 KV 跑 lm-eval GSM8K
 - [ ] 写出项目 A 的一页说明（见 `05-手写代码与系统设计.md` 的项目讲述模板）

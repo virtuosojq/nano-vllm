@@ -17,9 +17,9 @@
 1.2: 报告附带引擎内 prefix hit / KV util / per-request TTFT·TPOT.
 
 用法:
-  python baseline.py --save opt_xxx
-  python baseline.py --suites mixed latency --repeats 3
-  python baseline.py --compare results/a.json results/b.json
+  python experiments/baseline.py --save opt_xxx
+  python experiments/baseline.py --suites mixed latency --repeats 3
+  python experiments/baseline.py --compare results/a.json results/b.json
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from typing import Any, Callable
 
 import torch
 
+from _root import ROOT, resolve_report, result_path
 from nanovllm import LLM, SamplingParams
 
 DEFAULT_MODEL = "/root/autodl-tmp/huggingface/Qwen3-0.6B/"
@@ -199,7 +200,7 @@ def warmup(engine: LLM):
 # 测试套件
 # --------------------------------------------------------------------------- #
 def suite_correctness(engine: LLM) -> dict:
-    """固定输入 + 贪心采样 (T=0), 输出指纹; 与 align_hf.py 共用 prompt."""
+    """固定输入 + 贪心采样 (T=0), 输出指纹; 与 experiments/align_hf.py 共用 prompt."""
     prompts = [
         "The capital of France is",
         "def quicksort(arr):",
@@ -373,7 +374,7 @@ def collect_meta(model_path: str, engine: LLM, repeats: int) -> dict:
     try:
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=os.path.dirname(os.path.abspath(__file__)), stderr=subprocess.DEVNULL,
+            cwd=ROOT, stderr=subprocess.DEVNULL,
         ).decode().strip()
     except Exception:
         commit = "unknown"
@@ -478,7 +479,7 @@ def main():
                         help="serving 套件扫描的请求速率 (req/s)")
     parser.add_argument("--repeats", type=int, default=3,
                         help="每套件重复次数, 取中位数并记极差 (1.3)")
-    parser.add_argument("--save", default=None, help="保存名, 存至 results/<名>.json")
+    parser.add_argument("--save", default=None, help="保存名, 存至 <repo>/results/<名>.json")
     parser.add_argument("--enforce-eager", action="store_true", help="禁用 CUDA Graph")
     parser.add_argument("--kv-cache-dtype", default="auto", choices=["auto", "int8"],
                         help="3.1: KV 存储 dtype")
@@ -488,7 +489,7 @@ def main():
     args = parser.parse_args()
 
     if args.compare:
-        compare(*args.compare)
+        compare(str(resolve_report(args.compare[0])), str(resolve_report(args.compare[1])))
         return
 
     if args.repeats < 1:
@@ -526,11 +527,10 @@ def main():
     text = json.dumps(report, indent=2, ensure_ascii=False)
     print("\n" + text)
 
-    os.makedirs("results", exist_ok=True)
     name = args.save or time.strftime("baseline_%Y%m%d_%H%M%S")
-    path = os.path.join("results", name if name.endswith(".json") else f"{name}.json")
-    with open(path, "w") as f:
-        f.write(text)
+    path = result_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
     print(f"\nsaved -> {path}")
 
 

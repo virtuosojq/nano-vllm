@@ -375,7 +375,7 @@ Graph 优化了 launch，**没优化第 2–4 步**。
 
 # 2.4 笔记：调度策略消融（面试主戏）
 
-> 完整演示卡见仓库根目录 `DEMO_2.4.md`。证据：`results/opt_2.4_schedule.json`。
+> 完整演示卡见 `DEMO_2.4.md`。证据：`results/opt_2.4_schedule.json`。
 
 ## 一句话
 
@@ -424,8 +424,8 @@ Graph 优化了 launch，**没优化第 2–4 步**。
 
 # 2.7 笔记：Hybrid P+D + 相关概念
 
-> 证据：`results/opt_2.7_hybrid.json` · 复现：`python ablate_schedule.py --save opt_2.7_hybrid`
-> 单测：`tests/test_hybrid_schedule.py` · 对齐：默认 `align_hf.py` + hybrid 并发 4×64
+> 证据：`results/opt_2.7_hybrid.json` · 复现：`python experiments/ablate_schedule.py --save opt_2.7_hybrid`
+> 单测：`tests/test_hybrid_schedule.py` · 对齐：默认 `experiments/align_hf.py` + hybrid 并发 4×64
 
 ## 一句话
 
@@ -500,7 +500,7 @@ Graph 优化了 launch，**没优化第 2–4 步**。
 | `nanovllm/engine/scheduler.py` | `_try_schedule_prefill(max_seqs=)`；`hybrid` 分支先 decode 再填 prefill；`postprocess` 按 per-seq `cached < num_tokens` 决定是否 append | **调度语义核心**：同一步拼出混合 seq 列表；未完成 chunk 不能误 append，否则污染生成 |
 | `nanovllm/engine/model_runner.py` | 新增 `prepare_hybrid`；`run` 识别混合批 → varlen eager，禁 graph | **执行路径核心**：混合长度只能走 varlen+block_table；走 decode graph 会形状错误 |
 | `nanovllm/engine/llm_engine.py` | hybrid/`is_prefill=True` 不进 ngram；postprocess 前按 P/D 计 `num_tokens` | ngram verify 与混合批假设冲突；进度条/吞吐符号依赖计数约定 |
-| `ablate_schedule.py` | 增加 `hybrid_512` 点；统一 `enable_ngram=False`；默认 save `opt_2.7_hybrid` | 量化验收：同 mixed 负载出对照表，关 ngram 避免混淆归因 |
+| `experiments/ablate_schedule.py` | 增加 `hybrid_512` 点；统一 `enable_ngram=False`；默认 save `opt_2.7_hybrid` | 量化验收：同 mixed 负载出对照表，关 ngram 避免混淆归因 |
 | `tests/test_hybrid_schedule.py` | 断言同一步可含 P+D；纯 decode 时 `is_prefill=False` | 无 GPU 的调度契约回归，改调度时先挡回归 |
 | `results/opt_2.7_hybrid.json` | 三次中位数消融落盘 | 面试/台账证据本体 |
 | `IMPROVEMENT_PLAN.md` / `timeline.md` | 台账、M2.5 完成、下一跳 3.1 | 项目叙事与日历，不参与运行时 |
@@ -512,8 +512,8 @@ Graph 优化了 launch，**没优化第 2–4 步**。
 # 3.1 笔记：INT8 KV Cache（原理 + 做法）
 
 > 证据：`results/opt_3.1_int8_kv.json`（blocks/align）· `opt_3.1_baseline_{auto,int8}_eager.json`（吞吐）  
-> 复现：`python ablate_int8_kv.py` · `python align_hf.py --kv-cache-dtype int8`  
-> 吞吐对照：`baseline.py --suites throughput latency mixed --repeats 3 --enforce-eager --kv-cache-dtype {auto,int8} --gpu-memory-utilization 0.85`
+> 复现：`python experiments/ablate_int8_kv.py` · `python experiments/align_hf.py --kv-cache-dtype int8`  
+> 吞吐对照：`python experiments/baseline.py --suites throughput latency mixed --repeats 3 --enforce-eager --kv-cache-dtype {auto,int8} --gpu-memory-utilization 0.85`
 
 ## 一句话
 
@@ -602,8 +602,8 @@ Graph 预捕获假设固定 bf16 paged buffer；int8 + 动态 workspace 重映�
 2. `allocate_kv_cache`：按 int8 元素 + group scale 算 `block_bytes` → 块数↑；注入 `k/v_cache`、`k/v_scale`
 3. `store_kvcache_int8`：向量化 per-group 量化写入
 4. `dequant_active_kv`：`torch.unique` 活跃块 → workspace → remap `block_tables`
-5. `ablate_int8_kv.py`：落盘 blocks 比与 align 率
-6. `baseline.py --kv-cache-dtype`：吞吐/延迟对照（见上表）
+5. `experiments/ablate_int8_kv.py`：落盘 blocks 比与 align 率
+6. `experiments/baseline.py --kv-cache-dtype`：吞吐/延迟对照（见上表）
 
 ## 30 秒稿
 

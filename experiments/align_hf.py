@@ -4,9 +4,9 @@
 HF 默认 SDPA 会在 logits 接近时提前分叉，不能作为本引擎的权威对照。
 
 用法:
-  python align_hf.py
-  python align_hf.py --cuda-graph          # 再验默认 CUDA Graph 路径
-  python align_hf.py --model /path --max-tokens 64
+  python experiments/align_hf.py
+  python experiments/align_hf.py --cuda-graph          # 再验默认 CUDA Graph 路径
+  python experiments/align_hf.py --model /path --max-tokens 64
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import sys
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+import _root  # noqa: F401  # repo root on sys.path
 from nanovllm import LLM, SamplingParams
 
 DEFAULT_MODEL = "/root/autodl-tmp/huggingface/Qwen3-0.6B/"

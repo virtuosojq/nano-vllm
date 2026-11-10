@@ -164,7 +164,7 @@ fi
 
 if [[ ",$SCENES," == *",S0,"* ]]; then
   log "S0: reproduce offline baseline with old script"
-  run "$NANO_PY" "$ROOT/baseline.py" --model "${BASELINE_MODEL:-/root/autodl-tmp/huggingface/Qwen3-0.6B/}" \
+  run "$NANO_PY" "$ROOT/experiments/baseline.py" --model "${BASELINE_MODEL:-/root/autodl-tmp/huggingface/Qwen3-0.6B/}" \
     --suites throughput --save "$RESULT_DIR/s0_old_baseline.json"
 fi
 

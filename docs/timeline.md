@@ -40,14 +40,14 @@
 | 项 | 结果文件 / 入口 | 面试一句话 |
 |---|---|---|
 | D0 基线 | `results/baseline_v0.json` | 同配置对比锚点；throughput ~6153 tok/s |
-| 1.1 贪心 | `results/opt_1.1_greedy.json`、`align_hf.py` | HF flash-attn greedy 4×64 **100%** |
+| 1.1 贪心 | `results/opt_1.1_greedy.json`、`experiments/align_hf.py` | HF flash-attn greedy 4×64 **100%** |
 | 1.2+1.3 | `results/opt_1.2_1.3_d2.json` | 三次中位数+极差；ITL P99；`mixed`；prefix hit 与 1.59× 互证 |
 | 1.4 边界 | `results/opt_1.4_edges.json`、`tests/test_1_4_edges.py` | **#211 实修**；#199/#240/#114 已验证 N/A |
 | 2.4 调度 | `results/opt_2.4_schedule.json`、`DEMO_2.4.md` | LD ITL p99 **5.07→3.50**；budget 扫 TTFT↔吞吐 |
 | 2.6 打包 | `results/opt_2.6_decode_pack.json` | 常驻 pinned；**吞吐在噪声边**，不报加速比 |
 | 2.2 n-gram | `results/opt_2.2_ngram.json` | 重复文本 accept **~0.89**；HF 对齐 **≤40**；64 会分叉 |
 | **2.7 hybrid** | `results/opt_2.7_hybrid.json`、`tests/test_hybrid_schedule.py` | vs budget_512：thr **+7.7%**、TTFT **362→320**；同一步混 batch |
-| **3.1 INT8 KV** | `results/opt_3.1_int8_kv.json`、`ablate_int8_kv.py` | blocks **×1.78**；HF align **3/4**；禁 SM89 FP8 attn |
+| **3.1 INT8 KV** | `results/opt_3.1_int8_kv.json`、`experiments/ablate_int8_kv.py` | blocks **×1.78**；HF align **3/4**；禁 SM89 FP8 attn |
 
 未做（明确跳过）：**2.1 overlap**。层 C 全未开始。
 
@@ -59,7 +59,7 @@
 
 | 工作日 | 层 | 内容 | 卡 | 落盘 |
 |---|---|---|---|---|
-| **D0 ✅** | 0 | `baseline.py --save baseline_v0` | 单卡 | `results/baseline_v0.json` |
+| **D0 ✅** | 0 | `experiments/baseline.py --save baseline_v0` | 单卡 | `results/baseline_v0.json` |
 | **D1 ✅** | A | **1.1** 贪心 + HF exact-match（不含 top_p/top_k） | 单卡 | `opt_1.1_greedy.json`；HF 4×64 = 100% |
 | **D2 ✅** | A | **1.3** 三次中位数、ITL P99、`mixed`；**1.2** cache hit / KV util / per-req TTFT | 单卡 | `opt_1.2_1.3_d2.json`；bs1 极差 ≪2% |
 | **D3 ✅** | A | **1.4** #199 / #240 / #211 / #114 | 单卡 | #211 修；其余 N/A；`opt_1.4_edges.json` |
@@ -132,13 +132,13 @@ modelscope download --model Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 \
 
 ```bash
 # 同配置（层 A/B，Qwen3-0.6B 单卡）:
-python baseline.py --save opt_xxx
-python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
+python experiments/baseline.py --save opt_xxx
+python experiments/baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 
 # 换模型或 TP（层 C）:
-python baseline.py --save baseline_llama3b    # 或 baseline_moe_tp2
-python baseline.py --save opt_xxx
-python baseline.py --compare results/baseline_llama3b.json results/opt_xxx.json
+python experiments/baseline.py --save baseline_llama3b    # 或 baseline_moe_tp2
+python experiments/baseline.py --save opt_xxx
+python experiments/baseline.py --compare results/baseline_llama3b.json results/opt_xxx.json
 # 禁止: compare baseline_v0.json 与 MoE/Llama 结果
 
 # → IMPROVEMENT_PLAN.md 文末「结果台账」追加一行（指标变化 + commit + 正确性）

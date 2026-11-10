@@ -1,6 +1,6 @@
 # nano-vllm 面试项目改进路线
 
-> 方法论：每一项改进都遵循 **baseline → 假设 → 实现 → `baseline.py --compare` 量化验证 → 消融** 的闭环，
+> 方法论：每一项改进都遵循 **baseline → 假设 → 实现 → `experiments/baseline.py --compare` 量化验证 → 消融** 的闭环，
 > 结果记录到 `results/` 与本文件末尾的结果台账，面试时以表格呈现。
 >
 > 每一项都标注了**现状锚点**（代码里的具体位置），改进前先读对应代码，避免凭印象动工。
@@ -34,10 +34,10 @@
 ## 0. 基线（先跑这个）
 
 ```bash
-python baseline.py --save baseline_v0     # 已完成：results/baseline_v0.json（2026-08-19，单卡 Qwen3-0.6B）
+python experiments/baseline.py --save baseline_v0     # 已完成：results/baseline_v0.json（2026-08-19，单卡 Qwen3-0.6B）
 # 同模型、同 TP 的改进后:
-python baseline.py --save opt_xxx
-python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
+python experiments/baseline.py --save opt_xxx
+python experiments/baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 ```
 
 基线指标：总吞吐 / prefill·decode tok/s / TTFT·TPOT (P50/P90/P99) / 前缀缓存加速比 / 正确性指纹。
@@ -63,14 +63,14 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 ### 1.1 贪心采样 + HF 逐 token 对齐
 
 - **现状锚点**：`sampling_params.py:11` 直接 `assert temperature > 1e-10` 禁止贪心；
-  `sampler.py` 的 Gumbel-max 路径对所有温度统一处理。当前 baseline.py 用 1e-6 温度近似，依赖浮点 argmax 稳定性。
+  `sampler.py` 的 Gumbel-max 路径对所有温度统一处理。当前 `experiments/baseline.py` 用 1e-6 温度近似，依赖浮点 argmax 稳定性。
 - **做法（本项范围内）**：`temperature == 0` 走 `logits.argmax(-1)`。正确性从「指纹自洽」升级为「与权威实现对齐」。
 - **验收**：与 HuggingFace `generate(do_sample=False)` 输出 exact-match = 100%（4 条固定 prompt × 64 token）。
 - **明确后移**：`top_p` / `top_k`（SamplingParams 目前只有 temperature/max_tokens/ignore_eos）是采样能力缺口，但 **不要塞进 1.1 同一下午**。有余力再补，用固定 seed 对齐 HF 概率分布。
 
 ### 1.2 引擎内指标上报（克制范围）
 
-- **现状锚点**：baseline.py 是外部观测（对 step 计时），拿不到引擎内部状态；
+- **现状锚点**：`experiments/baseline.py` 是外部观测（对 step 计时），拿不到引擎内部状态；
   `block_manager.py` 里 `can_allocate` 命中前缀时、`free_block_ids` 长度变化处都是天然的埋点位置。
 - **做法（只埋三点，不做监控系统）**：
   1. per-request TTFT / TPOT；
@@ -129,7 +129,7 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
   2. `schedule()` 返回混合 seq 列表 + 每条 `num_scheduled_tokens`（decode=1，prefill=chunk）。
   3. `prepare_hybrid`：走 **varlen prefill 路径**（`flash_attn_varlen_func` + `block_table`），decode 行当作 `seqlen_q=1` 的 query；**不要**走 CUDA Graph decode（graph 是 1 token/row 桶）。
   4. `postprocess` 按条处理：prefill chunk 未结束则不 sample/append；decode 与 prefill 完成条走现有 append。
-- **验收**（`ablate_schedule.py` 同 mixed 16+16，三次中位数）：
+- **验收**（`experiments/ablate_schedule.py` 同 mixed 16+16，三次中位数）：
   1. 正确性：greedy 4×64 HF 对齐不回退（hybrid 关 ngram）。
   2. 对照表至少三列：`prefill_priority` / `token_budget` 轮转 / **`hybrid`**。主看 LD ITL p99 与 LP TTFT、总吞吐。预期 hybrid 相对轮转：**ITL 不差于 decode_priority 量级，TTFT/吞吐好于小预算轮转**（同一步吃掉 decode 空档）。
   3. 若吞吐增益 < 极差：仍以「同一步混 batch 的机制 + 调度痕迹（每步同时有 P 和 D）」为主证据。
@@ -146,7 +146,7 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
   2. attention 前把本步需要的 K/V 反量化到 bf16 workspace（decode 可只反量化当前页）。**第一版允许同步反量化**；async store pipeline（#228）有余力再加，不绑验收。
   3. head-major 重排 **可选**，不要和量化第一版绑死。
 - **验收**：
-  1. 正确性：`align_hf.py` 4×64 **允许少量 argmax 分叉**，须报 exact-match 率；面试主动说「KV 量化不是 bit-exact」。目标：≥ 默认温度 0 下 4 条里至少 3 条满匹配，或分叉位置记入台账。
+  1. 正确性：`experiments/align_hf.py` 4×64 **允许少量 argmax 分叉**，须报 exact-match 率；面试主动说「KV 量化不是 bit-exact」。目标：≥ 默认温度 0 下 4 条里至少 3 条满匹配，或分叉位置记入台账。
   2. 显存：同样 `gpu_memory_utilization` 下 `num_kvcache_blocks` 约 **×2**（扣 scale 开销后仍明显增加）。
   3. 性能：0.6B 上 4090 带宽宽，**tok/s 可能 < 3090 的 +22%**。主 KPI = **同显存最大并发 seq 或更长 max_model_len 仍能跑 mixed**；辅 KPI = throughput 套件中位数（极差门闩同 1.3）。换 Qwen3-8B 时另存基线，禁止对 `baseline_v0` 报 %。
 - **与 2.7 关系**：必须先 2.7。hybrid 的 varlen+block_table 读路径要在量化后仍正确（反量化 workspace 或 kernel 内 dequant）。
@@ -283,7 +283,7 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 - **增量式 detokenizer**：`llm_engine.py:89` 现状是生成结束后对完整 token 列表一次性 decode。只有做流式 server 才需要（UTF-8 跨 token 边界、skip_special_tokens、stop string）。
 - **OpenAI 兼容 server**（FastAPI + SSE）：把引擎变成「产品」。当前 `serving` 套件是进程内直连，只覆盖调度器+引擎层排队。
 - **xgrammar 结构化输出**（1–3d）：vLLM v1 默认后端；与 server 的 `response_format`/`json_schema` 配套。纯推理面试优先级低于 2.4/2.6。验收：schema 合法率 100%，ITL 开销 <5%，与 CUDA graph decode 兼容。
-- **开环压测 + goodput**：✅ 引擎层已完成（baseline.py `serving` 套件）；待做：server 层 HTTP 压测（对标 vLLM benchmark_serving）。
+- **开环压测 + goodput**：✅ 引擎层已完成（`experiments/baseline.py` `serving` 套件）；待做：server 层 HTTP 压测（对标 vLLM benchmark_serving）。
 - **压测对比**：与 vLLM 同机同模型对比，`bench.py` 已留切换注释。作为层 B 数字的外部锚点，不是新项目。
 
 ---
@@ -324,10 +324,10 @@ python baseline.py --compare results/baseline_v0.json results/opt_xxx.json
 | 日期 | 优化项 | commit | 对比基线 | 关键指标变化 | 正确性 |
 |---|---|---|---|---|---|
 | 2026-08-19 | 第 0 步建基线 | a5fa446 | —（自身） | 单卡 Qwen3-0.6B：throughput 套件 6153 tok/s；latency bs1 TPOT p50 2.28 ms | 指纹自洽（1e-6 温度近似） |
-| 2026-08-19 | 1.1 贪心 + HF 对齐（不含 top_p/top_k） | 未提交 | baseline_v0（正确性套件） | 非性能项。`SamplingParams` 允许 T=0；Sampler 走 `logits.argmax`。验收：`python align_hf.py` 4×64 exact-match 100%（裁判=HF `flash_attention_2`；默认 SDPA 会在 argmax 边界分叉）。CUDA Graph 路径同样 100%。指纹：prompt0 因真贪心相对 1e-6 变化（`7ad27c65ccd97ed7`），其余 3 条与 v0 相同。见 `results/opt_1.1_greedy.json` | **HF greedy exact-match 100%** |
+| 2026-08-19 | 1.1 贪心 + HF 对齐（不含 top_p/top_k） | 未提交 | baseline_v0（正确性套件） | 非性能项。`SamplingParams` 允许 T=0；Sampler 走 `logits.argmax`。验收：`python experiments/align_hf.py` 4×64 exact-match 100%（裁判=HF `flash_attention_2`；默认 SDPA 会在 argmax 边界分叉）。CUDA Graph 路径同样 100%。指纹：prompt0 因真贪心相对 1e-6 变化（`7ad27c65ccd97ed7`），其余 3 条与 v0 相同。见 `results/opt_1.1_greedy.json` | **HF greedy exact-match 100%** |
 | 2026-08-19 | 1.2 引擎三点埋点 + 1.3 统计补强 | 未提交 | 同配置三次中位数（新格式） | **1.2**：`EngineMetrics` 上报 prefix hit / KV util peak·mean / per-request TTFT·TPOT；`clear_prefix_cache` 保证测量独立。prefix_cache：shared hit **0.425** vs no-share **0.0**，speedup **1.59×** 互相印证（首波 prefill 同批无法自命中，0.425=17/32×4/5 属预期）。**1.3**：`--repeats 3` 取中位数+极差；`itl_ms`；新 `mixed` 套件。latency bs1 thr 极差 0.74/413≈0.2%≪2%。见 `results/opt_1.2_1.3_d2.json` | 指纹与 1.1 一致 |
-| 2026-08-19 | 1.4 边界回归 #199/#240/#211/#114 | 未提交 | —（正确性） | **#211 实修**：`may_append`/`can_append` 增加 `len(block_table) < num_blocks`，避免抢占后 re-allocate 已备块时再追加导致写错槽。**#199/#114 N/A**：fork 已含 #218（最多命中 `num_blocks-1`），原 `seqlen_q==0` 崩溃不再触发。**#240 N/A**：`==1` 相对 schedule→forward→postprocess 时序正确，跨块 decode 通过。套件 `tests/test_1_4_edges.py` + `baseline --suites edge_cases`；见 `results/opt_1.4_edges.json` | 7/7 pass·n/a；指纹稳定 |
-| 2026-08-19 | 2.4 调度策略消融 | 未提交 | mixed 同负载三次中位数 | 新增 `schedule_policy`∈{prefill_priority, decode_priority, token_budget}+`prefill_token_budget`。引擎单步仍纯 P/D；token_budget=限预算 prefill↔decode 轮转。**消融表**（LP=长prefill组 TTFT p50，LD=长decode组）：prefill 4453 tok/s / TTFT145 / ITL_p99 **5.1**；decode 4123 / 145 / **3.5**（decode 不饿死）；budget 256→4096 扫出 TTFT 736→97.5 与 thr 1976→4397 的权衡。见 `results/opt_2.4_schedule.json`，脚本 `ablate_schedule.py` | 1.4 回归仍过 |
+| 2026-08-19 | 1.4 边界回归 #199/#240/#211/#114 | 未提交 | —（正确性） | **#211 实修**：`may_append`/`can_append` 增加 `len(block_table) < num_blocks`，避免抢占后 re-allocate 已备块时再追加导致写错槽。**#199/#114 N/A**：fork 已含 #218（最多命中 `num_blocks-1`），原 `seqlen_q==0` 崩溃不再触发。**#240 N/A**：`==1` 相对 schedule→forward→postprocess 时序正确，跨块 decode 通过。套件 `tests/test_1_4_edges.py` + `experiments/baseline.py --suites edge_cases`；见 `results/opt_1.4_edges.json` | 7/7 pass·n/a；指纹稳定 |
+| 2026-08-19 | 2.4 调度策略消融 | 未提交 | mixed 同负载三次中位数 | 新增 `schedule_policy`∈{prefill_priority, decode_priority, token_budget}+`prefill_token_budget`。引擎单步仍纯 P/D；token_budget=限预算 prefill↔decode 轮转。**消融表**（LP=长prefill组 TTFT p50，LD=长decode组）：prefill 4453 tok/s / TTFT145 / ITL_p99 **5.1**；decode 4123 / 145 / **3.5**（decode 不饿死）；budget 256→4096 扫出 TTFT 736→97.5 与 thr 1976→4397 的权衡。见 `results/opt_2.4_schedule.json`，脚本 `experiments/ablate_schedule.py` | 1.4 回归仍过 |
 | 2026-08-19 | 2.6 宿主侧 decode 打包 | 未提交 | opt_1.2_1.3_d2 latency | 新增 `DecodeInputBatch`（pinned+NumPy→单次 H2D 进 graph buffer）；CUDA Graph decode 不再每步 `torch.tensor(... pin_memory)`。**吞吐**：bs1/8/64 thr +1.6%/+0.4%/+0.8%，step_p50 −1.3%/−0.8%/−0.7%；bs1 step 极差 0.07 ≥ 收益，**吞吐不作主证据**。本机无 nsys；主证据=打包路径零 `torch.tensor` 单测 + 稳态 pinned `data_ptr` 不变。见 `results/opt_2.6_decode_pack.json`、`tests/test_decode_input_batch.py` | 指纹与 1.1 一致 |
 | 2026-08-21 | 3.1 INT8 KV cache | 未提交 | 同 gpu_util=0.85 | `kv_cache_dtype=int8`：group-wise(G=16) 写侧量化 + 活跃 block gather-dequant 进 FA；禁 CUDA Graph。**blocks 655→1166（×1.78）**；`align_hf` **3/4** exact（prompt0 @5 分叉）。**吞吐（双方 eager）**：throughput **4436→993 tok/s（−78%）**；latency/mixed 约 **−60%**——主因读侧同步 dequant 税，非测噪。见 `opt_3.1_int8_kv.json`、`opt_3.1_baseline_{auto,int8}_eager.json`、`note.md` | 3/4 HF；1.4 过 |
 
