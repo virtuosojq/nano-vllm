@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "timestamp": "2026-11-17 12:06:14",
+    "git_commit": "dd08aea",
+    "model": "/root/autodl-tmp/models/Qwen3-4B",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "repeats": 1,
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false,
+      "schedule_policy": "prefill_priority",
+      "prefill_token_budget": 512,
+      "kv_cache_dtype": "auto",
+      "num_kvcache_blocks": 335,
+      "gpu_memory_utilization": 0.9
+    }
+  },
+  "suites": {
+    "correctness": {
+      "n_repeats": 1,
+      "median": {
+        "temperature": 0.0,
+        "fingerprints": {
+          "The capital of France is": "fdcbbbd0e21c3ed1",
+          "def quicksort(arr):": "2b934b85019b21ba",
+          "1 + 2 + 3 + ... + 100 =": "4338a90b15cd93a3",
+          "Translate to Chinese: The quick brown fox jumps over the lazy dog.": "05a57dd6dfd9f0cc"
+        },
+        "sample_text": " Paris. The capital of Germany is Berlin. The capital of Italy is Rome. The capital of Spain is Madrid. The capital of Portugal is Lisbon. The capital of Greece is Athens. The capital of Belgium is Br"
+      },
+      "range": {}
+    },
+    "edge_cases": {
+      "n_repeats": 1,
+      "median": {
+        "cases": [
+          {
+            "name": "#211 preempt resume schedule",
+            "status": "pass",
+            "detail": "cached=256 scheduled=155 bt=2"
+          },
+          {
+            "name": "#211 may_append no over-allocate",
+            "status": "pass",
+            "detail": "bt stayed [0, 3] (== num_blocks 2)"
+          },
+          {
+            "name": "#211 normal growth still allocates",
+            "status": "pass",
+            "detail": "bt=[0, 1]"
+          },
+          {
+            "name": "#114 exact block_size",
+            "status": "not_applicable",
+            "detail": "no crash; #218 caps cache at num_blocks-1 so seqlen_q never 0"
+          },
+          {
+            "name": "#199 multi-block full hit",
+            "status": "not_applicable",
+            "detail": "no crash; #218 caps cache at num_blocks-1 so seqlen_q never 0"
+          },
+          {
+            "name": "#240 may_append off-by-one",
+            "status": "not_applicable",
+            "detail": "cross-boundary decode OK; ==1 is correct given postprocess-before-next-schedule order"
+          },
+          {
+            "name": "#211 gpu multi-seq",
+            "status": "pass",
+            "detail": "finished 24 seqs"
+          }
+        ],
+        "num_fail": 0,
+        "ok": true
+      },
+      "range": {}
+    },
+    "latency": {
+      "n_repeats": 1,
+      "median": {
+        "batch_1": {
+          "num_seqs": 1,
+          "total_time_s": 1.248,
+          "total_completion_tokens": 128,
+          "throughput_tok_s": 102.54,
+          "prefill_tokens": 128,
+          "decode_tokens": 127,
+          "ttft_ms": {
+            "mean": 27.37,
+            "p50": 27.37,
+            "p90": 27.37,
+            "p99": 27.37
+          },
+          "tpot_ms": {
+            "mean": 9.61,
+            "p50": 9.61,
+            "p90": 9.61,
+            "p99": 9.61
+          },
+          "itl_ms": {
+            "mean": 9.61,
+            "p50": 9.61,
+            "p90": 9.63,
+            "p99": 9.69
+          },
+          "e2e_latency_s": {
+            "mean": 1.248,
+            "p50": 1.248,
+            "p90": 1.248,
+            "p99": 1.248
+          },
+          "step_time_ms": {
+            "mean": 9.75,
+            "p50": 9.61,
+            "p90": 9.63,
+            "p99": 9.7
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0,
+            "prefix_req_blocks": 1,
+            "kv_utilization": {
+              "mean": 0.003,
+              "peak": 0.003,
+              "num_samples": 128
+            },
+            "request_ttft_ms": {
+              "mean": 27.35,
+              "p50": 27.35,
+              "p90": 27.35,
+              "p99": 27.35
+            },
+            "request_tpot_ms": {
+              "mean": 9.61,
+              "p50": 9.61,
+              "p90": 9.61,
+              "p99": 9.61
+            },
+            "num_finished_requests": 1,
+            "ngram_accept_rate": 0.0,
+            "ngram_draft_tokens": 0,
+            "ngram_accepted_drafts": 0,
+            "ngram_verify_steps": 0
+          }
+        },
+        "batch_8": {
+          "num_seqs": 8,
+          "total_time_s": 1.406,
+          "total_completion_tokens": 1024,
+          "throughput_tok_s": 728.11,
+          "prefill_tokens": 1024,
+          "decode_tokens": 1016,
+          "ttft_ms": {
+            "mean": 59.69,
+            "p50": 59.69,
+            "p90": 59.69,
+            "p99": 59.69
+          },
+          "tpot_ms": {
+            "mean": 10.6,
+            "p50": 10.6,
+            "p90": 10.6,
+            "p99": 10.6
+          },
+          "itl_ms": {
+            "mean": 10.6,
+            "p50": 10.59,
+            "p90": 10.64,
+            "p99": 10.75
+          },
+          "e2e_latency_s": {
+            "mean": 1.406,
+            "p50": 1.406,
+            "p90": 1.406,
+            "p99": 1.406
+          },
+          "step_time_ms": {
+            "mean": 10.98,
+            "p50": 10.59,
+            "p90": 10.64,
+            "p99": 11.12
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0,
+            "prefix_req_blocks": 8,
+            "kv_utilization": {
+              "mean": 0.0239,
+              "peak": 0.0239,
+              "num_samples": 128
+            },
+            "request_ttft_ms": {
+              "mean": 59.67,
+              "p50": 59.67,
+              "p90": 59.67,
+              "p99": 59.67
+            },
+            "request_tpot_ms": {
+              "mean": 10.6,
+              "p50": 10.6,
+              "p90": 10.6,
+              "p99": 10.6
+            },
+            "num_finished_requests": 8,
+            "ngram_accept_rate": 0.0,
+            "ngram_draft_tokens": 0,
+            "ngram_accepted_drafts": 0,
+            "ngram_verify_steps": 0
+          }
+        },
+        "batch_64": {
+          "num_seqs": 64,
+          "total_time_s": 2.138,
+          "total_completion_tokens": 8192,
+          "throughput_tok_s": 3831.89,
+          "prefill_tokens": 8192,
+          "decode_tokens": 8128,
+          "ttft_ms": {
+            "mean": 454.85,
+            "p50": 454.85,
+            "p90": 454.85,
+            "p99": 454.85
+          },
+          "tpot_ms": {
+            "mean": 13.25,
+            "p50": 13.25,
+            "p90": 13.25,
+            "p99": 13.25
+          },
+          "itl_ms": {
+            "mean": 13.25,
+            "p50": 13.2,
+            "p90": 13.7,
+            "p99": 14.01
+          },
+          "e2e_latency_s": {
+            "mean": 2.138,
+            "p50": 2.138,
+            "p90": 2.138,
+            "p99": 2.138
+          },
+          "step_time_ms": {
+            "mean": 16.66,
+            "p50": 13.17,
+            "p90": 13.67,
+            "p99": 13.93
+          },
+          "engine_metrics": {
+            "prefix_cache_hit_rate": 0.0,
+            "prefix_hit_blocks": 0,
+            "prefix_req_blocks": 64,
+            "kv_utilization": {
+              "mean": 0.191,
+              "peak": 0.191,
+              "num_samples": 128
+            },
+            "request_ttft_ms": {
+              "mean": 454.77,
+              "p50": 454.77,
+              "p90": 454.81,
+              "p99": 454.82
+            },
+            "request_tpot_ms": {
+              "mean": 13.25,
+              "p50": 13.25,
+              "p90": 13.25,
+              "p99": 13.25
+            },
+            "num_finished_requests": 64,
+            "ngram_accept_rate": 0.0,
+            "ngram_draft_tokens": 0,
+            "ngram_accepted_drafts": 0,
+            "ngram_verify_steps": 0
+          }
+        }
+      },
+      "range": {}
+    }
+  }
+}

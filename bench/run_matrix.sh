@@ -22,6 +22,7 @@ SCENES="${SCENES:-S1,S2,S4}"      # comma-separated; S0/S3/S6 need extra data
 
 NANO_PY="${NANO_PY:-python}"
 VLLM_PY="${VLLM_PY:-python}"
+CLIENT_PY="${CLIENT_PY:-$VLLM_PY}"
 
 mkdir -p "$RESULT_DIR"
 
@@ -52,7 +53,7 @@ run() {
 wait_health() {
   local url="$1"
   local i
-  for i in $(seq 1 120); do
+  for i in $(seq 1 300); do
     if curl -fsS "$url" >/dev/null 2>&1; then
       return 0
     fi
@@ -82,7 +83,9 @@ vllm_cmd() {
   if [[ "$VARIANT" == "vllm_default" ]]; then
     extra=()
   elif [[ "$VARIANT" == "ngram" ]]; then
-    extra=(--speculative-config '{"method":"ngram","num_speculative_tokens":4,"prompt_lookup_max":3,"prompt_lookup_min":1}')
+    extra=(--max-model-len 4096 --max-num-seqs 256 --max-num-batched-tokens 8192
+           --gpu-memory-utilization 0.9 --dtype bfloat16
+           --speculative-config '{"method":"ngram","num_speculative_tokens":4,"prompt_lookup_max":3,"prompt_lookup_min":1}')
   else
     extra=(--max-model-len 4096 --max-num-seqs 256 --max-num-batched-tokens 8192
            --gpu-memory-utilization 0.9 --dtype bfloat16)
@@ -101,8 +104,11 @@ bench_one() {
     S6) extra=(--dataset-name hf --dataset-path likaixin/InstructCoder --max-concurrency "${MAX_CONCURRENCY:-1}" --request-rate inf --num-prompts 100) ;;
     *) log "unknown scene $scene"; return 1 ;;
   esac
-  run "$VLLM_PY" -m vllm.entrypoints.cli.main bench serve \
-    --host "$HOST" --port "$port" "${COMMON[@]}" "${extra[@]}"
+  run "$CLIENT_PY" -m vllm.entrypoints.cli.main bench serve \
+    --host "$HOST" --port "$port" \
+    --label "${ENGINE}_${VARIANT}_${scene}" \
+    --result-filename "$(date +%Y%m%d)_${scene}_${ENGINE}_${VARIANT}.json" \
+    "${COMMON[@]}" "${extra[@]}"
 }
 
 start_nano() {
@@ -119,11 +125,24 @@ start_nano() {
 
 start_vllm() {
   log "start vLLM ($VARIANT) on :$VLLM_PORT"
+  local extra=()
+  if [[ "$VARIANT" == "vllm_default" ]]; then
+    extra=()
+  elif [[ "$VARIANT" == "ngram" ]]; then
+    extra=(--max-model-len 4096 --max-num-seqs 256 --max-num-batched-tokens 8192
+           --gpu-memory-utilization 0.9 --dtype bfloat16
+           --speculative-config '{"method":"ngram","num_speculative_tokens":4,"prompt_lookup_max":3,"prompt_lookup_min":1}')
+  else
+    extra=(--max-model-len 4096 --max-num-seqs 256 --max-num-batched-tokens 8192
+           --gpu-memory-utilization 0.9 --dtype bfloat16)
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
-    vllm_cmd
+    echo "$VLLM_PY" -m vllm.entrypoints.openai.api_server --model "$MODEL" \
+      --served-model-name "$SERVED_NAME" --port "$VLLM_PORT" "${extra[@]}"
     return 0
   fi
-  eval $(vllm_cmd) &
+  "$VLLM_PY" -m vllm.entrypoints.openai.api_server --model "$MODEL" \
+    --served-model-name "$SERVED_NAME" --port "$VLLM_PORT" "${extra[@]}" &
   VLLM_PID=$!
   wait_health "http://$HOST:$VLLM_PORT/health"
 }
@@ -135,7 +154,12 @@ stop_servers() {
 trap stop_servers EXIT
 
 log "collect env"
-run "$NANO_PY" "$ROOT/tools/collect_env.py" --model "$MODEL" -o "$RESULT_DIR/env.json"
+if [[ "$ENGINE" == "nano" || "$ENGINE" == "both" ]]; then
+  run "$NANO_PY" "$ROOT/tools/collect_env.py" --model "$MODEL" -o "$RESULT_DIR/env_nano.json"
+fi
+if [[ "$ENGINE" == "vllm" || "$ENGINE" == "both" ]]; then
+  run "$VLLM_PY" "$ROOT/tools/collect_env.py" --model "$MODEL" -o "$RESULT_DIR/env_vllm.json"
+fi
 
 IFS=',' read -r -a SCENE_ARR <<< "$SCENES"
 

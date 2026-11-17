@@ -1,0 +1,17 @@
+measuring auto ...
+{"num_kvcache_blocks": 337, "block_size": 256, "tokens": 86272}
+measuring int8 ...
+{"num_kvcache_blocks": 219, "block_size": 256, "tokens": 56064}
+{
+  "auto": {
+    "num_kvcache_blocks": 337,
+    "block_size": 256,
+    "tokens": 86272
+  },
+  "int8": {
+    "num_kvcache_blocks": 219,
+    "block_size": 256,
+    "tokens": 56064
+  },
+  "ratio_int8_over_auto": 0.6498516320474778
+}

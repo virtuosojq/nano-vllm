@@ -1,0 +1,95 @@
+{
+  "meta": {
+    "timestamp": "2026-11-17 12:06:51",
+    "git_commit": "dd08aea",
+    "model": "/root/autodl-tmp/models/Qwen3-4B",
+    "gpu": "NVIDIA GeForce RTX 4090 D",
+    "torch": "2.5.1+cu124",
+    "python": "3.12.3",
+    "repeats": 1,
+    "config": {
+      "max_num_batched_tokens": 16384,
+      "max_num_seqs": 512,
+      "max_model_len": 4096,
+      "kvcache_block_size": 256,
+      "tensor_parallel_size": 1,
+      "enforce_eager": false,
+      "schedule_policy": "prefill_priority",
+      "prefill_token_budget": 512,
+      "kv_cache_dtype": "auto",
+      "num_kvcache_blocks": 337,
+      "gpu_memory_utilization": 0.9
+    }
+  },
+  "suites": {
+    "throughput": {
+      "n_repeats": 1,
+      "median": {
+        "num_seqs": 256,
+        "total_time_s": 58.92,
+        "total_completion_tokens": 133966,
+        "throughput_tok_s": 2273.71,
+        "prefill_tokens": 200228,
+        "decode_tokens": 133571,
+        "ttft_ms": {
+          "mean": 15840.23,
+          "p50": 9829.69,
+          "p90": 34120.59,
+          "p99": 42061.96
+        },
+        "tpot_ms": {
+          "mean": 34.14,
+          "p50": 33.05,
+          "p90": 40.33,
+          "p99": 70.17
+        },
+        "itl_ms": {
+          "mean": 32.38,
+          "p50": 24.22,
+          "p90": 24.87,
+          "p99": 114.17
+        },
+        "e2e_latency_s": {
+          "mean": 32.755,
+          "p50": 32.584,
+          "p90": 52.328,
+          "p99": 56.445
+        },
+        "step_time_ms": {
+          "mean": 25.15,
+          "p50": 24.04,
+          "p90": 24.7,
+          "p99": 87.93
+        },
+        "engine_metrics": {
+          "prefix_cache_hit_rate": 0.1013,
+          "prefix_hit_blocks": 109,
+          "prefix_req_blocks": 1076,
+          "kv_utilization": {
+            "mean": 0.7459,
+            "peak": 1.0,
+            "num_samples": 2339
+          },
+          "request_ttft_ms": {
+            "mean": 15838.81,
+            "p50": 9827.79,
+            "p90": 34118.4,
+            "p99": 42059.7
+          },
+          "request_tpot_ms": {
+            "mean": 34.14,
+            "p50": 33.04,
+            "p90": 40.33,
+            "p99": 70.17
+          },
+          "num_finished_requests": 256,
+          "ngram_accept_rate": 0.0,
+          "ngram_draft_tokens": 0,
+          "ngram_accepted_drafts": 0,
+          "ngram_verify_steps": 0
+        }
+      },
+      "range": {}
+    }
+  }
+}

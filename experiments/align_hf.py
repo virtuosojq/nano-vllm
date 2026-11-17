@@ -67,12 +67,17 @@ def nano_greedy(
     max_tokens: int,
     enforce_eager: bool,
     kv_cache_dtype: str = "auto",
+    schedule_policy: str = "prefill_priority",
+    prefill_token_budget: int = 512,
 ) -> list[list[int]]:
     llm = LLM(
         model_path,
         enforce_eager=enforce_eager,
         max_model_len=4096,
         kv_cache_dtype=kv_cache_dtype,
+        schedule_policy=schedule_policy,
+        prefill_token_budget=prefill_token_budget,
+        enable_ngram=False,
     )
     token_ids = [llm.tokenizer.encode(p) for p in prompts]
     sp = SamplingParams(temperature=0.0, max_tokens=max_tokens, ignore_eos=True)
@@ -91,12 +96,17 @@ def main() -> int:
                         help="nano 侧开启 CUDA Graph（默认 eager，与 HF flash-attn 对齐）")
     parser.add_argument("--kv-cache-dtype", default="auto", choices=["auto", "int8"],
                         help="3.1: int8 KV 量化路径")
+    parser.add_argument("--schedule-policy", default="prefill_priority",
+                        choices=["prefill_priority", "decode_priority", "token_budget", "hybrid"],
+                        help="调度类变体应对齐到同一份 HF greedy 输出")
+    parser.add_argument("--prefill-token-budget", type=int, default=512)
     args = parser.parse_args()
 
     print(f"model={args.model}")
     print(
         f"prompts={len(args.prompts)}  max_tokens={args.max_tokens}  "
-        f"nano_eager={not args.cuda_graph}  kv_cache_dtype={args.kv_cache_dtype}"
+        f"nano_eager={not args.cuda_graph}  kv_cache_dtype={args.kv_cache_dtype}  "
+        f"schedule_policy={args.schedule_policy}"
     )
     print("running HF greedy (flash_attention_2) ...")
     hf_ids = hf_greedy(args.model, args.prompts, args.max_tokens)
@@ -105,6 +115,8 @@ def main() -> int:
         args.model, args.prompts, args.max_tokens,
         enforce_eager=not args.cuda_graph,
         kv_cache_dtype=args.kv_cache_dtype,
+        schedule_policy=args.schedule_policy,
+        prefill_token_budget=args.prefill_token_budget,
     )
 
     ok = True

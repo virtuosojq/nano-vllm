@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-11-17T06:56:34.958526+00:00",
+  "python": "3.12.3",
+  "executable": "/root/autodl-tmp/envs/vllm/bin/python",
+  "hostname": "autodl-container-eac843a08e-c8cc0b5e",
+  "git": {
+    "commit": "dd08aea56f4546fe74b1055c1e4080e99be87e10",
+    "branch": "bench-v2",
+    "root": "/root/autodl-tmp/nano-vllm"
+  },
+  "packages": {
+    "torch": "2.13.0+cu130",
+    "transformers": "5.17.0",
+    "triton": "3.7.1",
+    "vllm": "0.31.0",
+    "flash_attn": null
+  },
+  "nvidia": {
+    "gpus": [
+      {
+        "name": "NVIDIA GeForce RTX 4090 D",
+        "memory": "24564 MiB",
+        "driver": "580.105.08"
+      }
+    ],
+    "nvidia_smi_ok": true,
+    "cuda_from_smi": true
+  },
+  "npu": {},
+  "model": "/root/autodl-tmp/models/Qwen3-4B",
+  "env_subset": {
+    "HF_ENDPOINT": "https://hf-mirror.com"
+  },
+  "torch_cuda": {
+    "version": "13.0",
+    "device_count": 1,
+    "device0": "NVIDIA GeForce RTX 4090 D"
+  }
+}
